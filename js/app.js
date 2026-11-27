@@ -881,6 +881,46 @@ var ROAK = (function () {
     }
   }
 
+  /* Measure the space left on this device's screen and give it to the room box,
+     so the reading part scrolls instead of the page. Runs on every redraw and
+     every resize; where nothing can be measured the CSS fallback stands. */
+  function fitRoom() {
+    var room = null;
+    var els = document.getElementsByClassName ? document.getElementsByClassName('room') : null;
+    if (els && els.length) { room = els[0]; }
+    if (!room || !room.style) { return; }
+    var vh = 0;
+    try { vh = window.innerHeight || document.documentElement.clientHeight || 0; } catch (e) { vh = 0; }
+    if (!vh || vh < 200) { return; }
+
+    var top = 0;
+    try {
+      var r = room.getBoundingClientRect ? room.getBoundingClientRect() : null;
+      if (r) { top = r.top; }
+      else { top = room.offsetTop || 0; }
+    } catch (e) { top = 0; }
+
+    var used = 0;
+    try { used = (window.pageYOffset || document.documentElement.scrollTop || 0); } catch (e) { used = 0; }
+
+    /* what comes under the box: the footer and the page's own bottom padding */
+    var under = 74;
+    var h = Math.floor(vh - top - under);
+    if (h < 240) { h = 240; }
+    if (h > 900) { h = 900; }
+    room.style.height = h + 'px';
+  }
+
+  /* "a, b, c" from the account list */
+  function namesOf(accounts) {
+    var out = [];
+    for (var i = 0; i < accounts.length && i < 40; i++) {
+      out.push(accounts[i].name || '');
+    }
+    if (accounts.length > 40) { out.push('and ' + (accounts.length - 40) + ' more'); }
+    return out.join(', ');
+  }
+
   function shell(title, body) {
     var chat = list(tree.chat);
     var nb = list(tree.neighborhood);
@@ -908,7 +948,7 @@ var ROAK = (function () {
       '</div>' +
       favBar(r) + '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div class="nav">' + nav + '</div>' +
-      '<div class="wrap">' +
+      '<div class="wrap page-' + esc(r) + '">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
         '<h1>' + esc(title) + '</h1>' +
         body +
@@ -926,6 +966,7 @@ var ROAK = (function () {
     document.getElementById('root').innerHTML = html;
     favStuck = false;
     stickBar();
+    fitRoom();
 
     var sib = document.getElementById('signinbtn');
     if (sib) { sib.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
@@ -1260,6 +1301,7 @@ var ROAK = (function () {
     body += head;
     body += statusBox();
     body += nameBox();
+    body += '<div class="room">';
     body += '<p class="small dim" id="chatcount">' + all.length + ' message' + (all.length === 1 ? '' : 's') +
             ' saved. Showing the last ' + shownCount + '. Live: new messages appear on their own.</p>';
     body += '<div class="chatlog" id="chatlog">' + chatLogHtml() + '</div>';
@@ -1270,7 +1312,7 @@ var ROAK = (function () {
         '<textarea id="chattext" maxlength="500"></textarea>' +
         '<button class="btn wide" type="submit">Send</button>' +
       '</form>' +
-    '</div>';
+    '</div></div>';
 
     shell('Chat', body);
     wireStart();
@@ -1323,6 +1365,7 @@ var ROAK = (function () {
 
     if (!id) {
       var mine = dmMine();
+      body += '<div class="room"><div class="roomlist">';
       body += '<p class="small dim">Your conversations, kept from visit to visit. ' +
               'Tap <b>+</b> to start a new one.</p>';
       if (!mine.length) {
@@ -1336,7 +1379,8 @@ var ROAK = (function () {
           '<span class="t">' + esc(m.other) + (unread ? ' <span class="tag">' + unread + '</span>' : '') + '</span>' +
           '<span class="m">' + esc(String(m.preview).slice(0, 60)) + ' &middot; ' + when(m.at) + '</span></a>';
       }
-      body += '<a class="btn wide" href="#" id="dmnew">+ New direct message</a>';
+      body += '</div><div class="roomfoot">' +
+        '<a class="btn wide" href="#" id="dmnew">+ New direct message</a></div></div>';
       shell('Direct messages', body);
       wireStart();
       wirePlus('dm');
@@ -1375,12 +1419,13 @@ var ROAK = (function () {
     body += '<div class="box tight"><b>With ' + esc(otherName) + '</b><br>' +
             '<span class="small dim">' + msgs.length + ' message' + (msgs.length === 1 ? '' : 's') +
             ' &middot; kept from visit to visit</span></div>';
+    body += '<div class="room">';
     body += '<div class="chatlog" id="dmlog">' + dmLogHtml(id) + '</div>';
     body += '<div class="chatform"><form id="dmform" action="#dm?id=' + encodeURIComponent(id) + '">' +
       '<label for="dmtext">Message</label>' +
       '<textarea id="dmtext" maxlength="500"></textarea>' +
       '<button class="btn wide" type="submit">Send</button>' +
-    '</form></div>';
+    '</form></div></div>';
 
     shell('Direct messages', body);
     wireStart();
@@ -1750,6 +1795,7 @@ var ROAK = (function () {
       body += '<div class="box tight"><b>' + esc(t.title) + '</b><br>' +
               '<span class="small dim">started by ' + esc(t.by) + ' &middot; ' + when(t.at) +
               ' &middot; ' + replies.length + ' repl' + (replies.length === 1 ? 'y' : 'ies') + '</span></div>';
+      body += '<div class="room"><div class="roomlist" id="replies">';
       if (!replies.length) {
         body += '<div class="empty"><b>No replies yet.</b></div>';
       }
@@ -1759,11 +1805,11 @@ var ROAK = (function () {
           '<div class="post-body">' + esc(replies[i].text) + '</div>' +
         '</div>';
       }
-      body += '<form id="replyform" action="#topics?id=' + encodeURIComponent(id) + '">' +
+      body += '</div><div class="roomfoot"><form id="replyform" action="#topics?id=' + encodeURIComponent(id) + '">' +
         '<label for="replytext">Reply</label>' +
         '<textarea id="replytext" maxlength="2000"></textarea>' +
         '<button class="btn wide" type="submit">Post reply</button>' +
-      '</form>';
+      '</form></div></div>';
       body = '<div class="subtabs">' +
         '<a class="subtab" href="#topics">All topics</a>' +
         '<a class="plus" href="#" id="topicplus" title="New topic">+</a>' +
@@ -1808,7 +1854,7 @@ var ROAK = (function () {
     body += '<p class="small dim">One subject per thread. Every topic and reply is kept. ' +
             'Tap <b>+</b> to start one.</p>';
 
-    body += '<h2>All topics</h2>';
+    body += '<div class="room"><div class="roomlist">';
     var topics = list(tree.topics).reverse();
     if (!topics.length) {
       body += '<div class="empty"><b>No topics yet.</b><br><span class="small">Start the first one above.</span></div>';
@@ -1821,6 +1867,7 @@ var ROAK = (function () {
         '<span class="m">' + esc(tt.by) + ' &middot; ' + n + ' repl' + (n === 1 ? 'y' : 'ies') +
         ' &middot; ' + when(tt.at) + '</span></a>';
     }
+    body += '</div></div>';
 
     shell('Topics', body);
     wireStart();
@@ -2125,19 +2172,20 @@ var ROAK = (function () {
     var body = '';
     body += statusBox();
     body += nameBox();
+    body += '<div class="room"><div class="roomlist">';
     body += '<div class="box tight"><p class="small" style="margin:0">' +
       '<b>Your own conversation with the AI.</b> It is kept in its own place in the ' +
       'database, separate from the shared boards, and only the page here shows it.' +
       '</p></div>';
     body += '<div class="chatlog" id="ailog">' + aiLogHtml() + '</div>';
-    body += '<div class="chatform">' +
+    body += '</div><div class="roomfoot"><div class="chatform">' +
       '<form id="aiform" action="#ai">' +
         '<label for="aitext">Question</label>' +
         '<textarea id="aitext" maxlength="2000"></textarea>' +
         '<button class="btn wide" type="submit" id="aigo">Ask</button>' +
         '<button class="btn wide" type="button" id="aiclear">Clear this conversation</button>' +
       '</form>' +
-    '</div>';
+    '</div></div></div>';
 
     shell('AI Chat', body);
     wireStart();
@@ -2588,7 +2636,7 @@ var ROAK = (function () {
     } else {
       window.addEventListener('hashchange', render, false);
       window.addEventListener('scroll', stickBar, false);
-      window.addEventListener('resize', stickBar, false);
+      window.addEventListener('resize', function () { stickBar(); fitRoom(); }, false);
     }
     pull(function () {
       render();
