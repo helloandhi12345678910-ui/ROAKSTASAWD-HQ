@@ -49,7 +49,7 @@ body {
   text-decoration: none;
 }
 
-/* Navigation: plain block links, thumb-sized */
+/* Navigation: plain block links, thumb-sized (the old list; now unused) */
 .nav {
   border-bottom: 2px solid #000000;
   padding: 0;
@@ -87,15 +87,6 @@ body {
   border-color: #ffffff;
 }
 
-/* The favourites bar stays at the top of the screen while you scroll */
-.favstick {
-  position: -webkit-sticky;
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  background: #ffffff;
-}
-
 /* The x in the corner: back to the HQ screen, on every app page */
 .closer {
   position: fixed;
@@ -126,12 +117,22 @@ body {
   display: none;
 }
 
-/* Favourites bar: your starred apps, on every page */
+/* The one bar with apps: fixed to the bottom of the screen, on every page */
 .favbar {
-  border-bottom: 2px solid #000000;
-  padding: 6px 8px 8px 8px;
+  border-top: 2px solid #000000;
+  padding: 6px 8px;
   background: #ffffff;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+}
+.favbar.dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
 }
 .favbar a.fav {
   display: inline-block;
