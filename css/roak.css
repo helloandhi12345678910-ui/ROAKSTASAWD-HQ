@@ -87,6 +87,30 @@ body {
   border-color: #ffffff;
 }
 
+/* Admin screen: one person per row, their powers under the name */
+.adminrow {
+  border-bottom: 2px solid #000000;
+  padding: 8px 10px;
+}
+.adminrow:last-child {
+  border-bottom: 0;
+}
+.adminname {
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+.adminacts .btn {
+  margin: 0 6px 6px 0;
+}
+
+/* A notice the admin put up */
+.notice {
+  border: 2px solid #000000;
+  padding: 10px 12px;
+  margin: 0 0 12px 0;
+  font-size: 17px;
+}
+
 /* The x in the corner: back to the HQ screen, on every app page */
 .closer {
   position: fixed;
