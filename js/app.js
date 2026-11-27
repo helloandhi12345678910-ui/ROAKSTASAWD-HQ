@@ -824,11 +824,12 @@ var ROAK = (function () {
     ['code', 'Code']
   ];
 
-  /* The top bar: every app you starred, one tap away, on any page.
+  /* The one bar with apps, at the bottom of the screen on every page.
      Tapping the app you are on (or the star) goes to the Favourites screen. */
-  function favBar(r) {
+  function dockBar(r) {
     var mine = favs();
-    var h = '<div class="favbar" id="favbar">' +
+    var h = '<div class="favbar dock" id="favbar">' +
+      '<a class="fav' + (r === 'home' ? ' on' : '') + '" href="#home" title="The HQ screen">HQ</a>' +
       '<a class="fav" href="#favorites"' + (r === 'favorites' ? ' class="on"' : '') + ' title="Favourites">&#9733;</a>';
     for (var i = 0; i < mine.length; i++) {
       var k = mine[i];
@@ -839,44 +840,22 @@ var ROAK = (function () {
         esc(short) + (here ? '<span class="favx">&#8635;</span>' : '') + '</a>';
     }
     if (!mine.length) {
-      h += '<span class="favempty">Tap &#9733; to put your apps up here.</span>';
+      h += '<span class="favempty">Tap &#9733; to keep an app here.</span>';
     }
     h += '</div>';
     return h;
   }
 
-  /* Older Kindle browsers ignore position:sticky, so the bar is also stuck by
-     script on every scroll and resize. Harmless where CSS sticky works. */
-  var favStuck = false;
-
+  /* The bar sits at the bottom of the screen by CSS, and the page is given the
+     same space at its end so nothing hides behind it. */
   function stickBar() {
     var b = document.getElementById('favbar');
-    if (!b || !b.style) { return; }
-    var y = 0;
-    try { y = window.pageYOffset || document.documentElement.scrollTop || 0; } catch (e) { y = 0; }
-    if (y > 40) {
-      if (favStuck) { return; }
-      favStuck = true;
-      b.style.position = 'fixed';
-      b.style.top = '0';
-      b.style.left = '0';
-      b.style.right = '0';
-      b.style.zIndex = '20';
-      b.style.borderTop = '2px solid #000000';
-      var h = b.offsetHeight || 56;
-      var sp = document.getElementById('favspace');
-      if (sp) { sp.style.height = h + 'px'; }
-    } else {
-      if (!favStuck) { return; }
-      favStuck = false;
-      b.style.position = '';
-      b.style.top = '';
-      b.style.left = '';
-      b.style.right = '';
-      b.style.zIndex = '';
-      b.style.borderTop = '';
-      var sp0 = document.getElementById('favspace');
-      if (sp0) { sp0.style.height = '0px'; }
+    var sp = document.getElementById('favspace');
+    if (sp) {
+      var h = 0;
+      if (b && b.offsetHeight) { h = b.offsetHeight; }
+      else { h = 56; }
+      sp.style.height = h + 'px';
     }
   }
 
@@ -928,12 +907,6 @@ var ROAK = (function () {
     var r = route();
     var counts = { chat: chat.length, neighborhood: nb.length, pinboard: pins.length, topics: topics.length };
 
-    var nav = '';
-    for (var i = 0; i < NAV.length; i++) {
-      var key = NAV[i][0];
-      var tag = counts[key] ? '<span class="tag">' + counts[key] + '</span>' : '';
-      nav += '<a href="#' + key + '"' + (r === key ? ' class="on"' : '') + '>' + NAV[i][1] + tag + '</a>';
-    }
 
     var who = me();
     var whoBar = who
@@ -945,8 +918,6 @@ var ROAK = (function () {
       '<div class="bar">' + whoBar +
         '<a href="#home"><span class="bar-title">ROAKSTASAWD</span></a>' +
       '</div>' +
-      favBar(r) + '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
-      '<div class="nav">' + nav + '</div>' +
       (r === 'home' ? '' : '<a class="closer" href="#home" id="tocloser" title="Back to the HQ">&#10005;</a>') +
       '<div class="wrap page-' + esc(r) + '">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
@@ -959,12 +930,13 @@ var ROAK = (function () {
             : 'no backend set yet &mdash; posts stay on this device.') +
         '</footer>' +
       '</div>' +
+      dockBar(r) +
+      '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div id="picker" class="overlay" style="display:none"></div>' +
       '<div id="signin" class="overlay" style="display:none"><div class="wrap" style="padding-top:0" id="signinbody"></div></div>' +
       '<div id="toast"></div>';
 
     document.getElementById('root').innerHTML = html;
-    favStuck = false;
     stickBar();
     fitRoom();
 
@@ -1153,7 +1125,9 @@ var ROAK = (function () {
       ['code', 'Code', 'many languages', 'write and run code here']
     ];
     var mine = favs();
-    body += '<h2>Apps</h2><div class="tiles">';
+    body += '<h2>Apps</h2>' +
+      '<p class="small dim">Every app is also in the bar along the bottom of the screen.</p>' +
+      '<div class="tiles">';
     for (var t = 0; t < tiles.length; t++) {
       var k = tiles[t][0];
       var starred = indexIn(mine, k) >= 0;
