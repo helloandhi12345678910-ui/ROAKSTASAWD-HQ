@@ -1,0 +1,20 @@
+# The ROAKSTASAWD HQ on Cloudflare: one Worker that serves the site and the API,
+# and one D1 database. Free plan, no card.
+
+name = "roak-hq"
+main = "worker/roak.js"
+compatibility_date = "2026-01-01"
+
+# the site's own files (index.html, css/, js/) are served by the same Worker
+[assets]
+directory = "."
+binding = "ASSETS"
+# the Worker answers /api itself; everything else is a file
+run_worker_first = false
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "roak-hq"
+# filled in by `wrangler d1 create roak-hq` (it prints these two lines)
+database_id = "PASTE-THE-DATABASE-ID-HERE"
