@@ -830,10 +830,11 @@ var ROAK = (function () {
       '<a class="fav" href="#favorites"' + (r === 'favorites' ? ' class="on"' : '') + ' title="Favourites">&#9733;</a>';
     for (var i = 0; i < mine.length; i++) {
       var k = mine[i];
-      var label = appLabel(k);
-      var short = label.replace('Neighborhood', 'Hood').replace('Pinboard', 'Pins');
-      h += '<a class="fav" href="#' + k + '"' + (r === k ? ' class="on"' : '') + '>' +
-        esc(short) + (r === k ? '<span class="favx" title="Change favourites">&times;</span>' : '') + '</a>';
+      var short = appLabel(k).replace('Neighborhood', 'Hood').replace('Pinboard', 'Pins');
+      var here = (r === k);
+      h += '<a class="fav' + (here ? ' on' : '') + '" href="#' + (here ? 'favorites' : k) + '"' +
+        (here ? ' title="You are here — tap to change your favourites"' : '') + '>' +
+        esc(short) + (here ? '<span class="favx">&#8635;</span>' : '') + '</a>';
     }
     if (!mine.length) {
       h += '<span class="favempty">Tap &#9733; to put your apps up here.</span>';
@@ -867,7 +868,7 @@ var ROAK = (function () {
       '<div class="bar">' + whoBar +
         '<a href="#home"><span class="bar-title">ROAKSTASAWD</span></a>' +
       '</div>' +
-      favBar(r) +
+      '<div class="favstick">' + favBar(r) + '</div>' +
       '<div class="nav">' + nav + '</div>' +
       '<div class="wrap">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
