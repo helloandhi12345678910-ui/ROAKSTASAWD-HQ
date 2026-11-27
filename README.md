@@ -17,23 +17,27 @@ Live at: **https://helloandhi12345678910-ui.github.io/ROAKSTASAWD-HQ/**
 | `#neighborhood` | Longer posts with optional one-word tags, likes, delete your own |
 | `#pinboard` | Pins: permanent notes, kept until you unpin them; edit your own |
 | `#topics` | One subject per thread, with replies |
-| `#js` | A JavaScript playground: write code, tap Run, read the output and a live preview |
 
 ## Accounts
 
-- Joining makes an account: a **name** (20 characters max) and a **key** made on
-  the device. No two accounts can share a name — compared without capitals or
-  spaces, so `Big Joe`, `bigjoe` and `BIG JOE` are the same name.
-- The key is kept in the browser on the device that made the account, so that
-  device stays signed in. Signing in elsewhere means typing the key.
-- The key is what the page uses to decide which posts are yours (edit, delete,
-  unpin). It is not sent anywhere except inside the shared tree, so treat it like
-  a password and do not paste it into public places.
+- Joining makes an account: a **name** (20 characters max) and a **password**
+  (6+ characters). No two accounts can share a name — compared without capitals
+  or spaces, so `Big Joe`, `bigjoe` and `BIG JOE` are the same name.
+- **The password is never stored or sent.** The page turns it into a salted hash
+  in your own browser and only that hash goes into the database, so nothing in
+  the database can be turned back into a password. A wrong password gets no hint
+  and no account details are shown to anyone who is not signed in.
+- The hash is made with PBKDF2-HMAC-SHA256 (60,000 rounds) where the browser has
+  Web Crypto, and with a salted SHA-256 where it does not (old Kindle builds).
+  Each account records which one it used, so it can be checked on any device.
+  A browser that cannot do the account's method says so instead of guessing.
+- Signing in on a Kindle means typing the password again; the site keeps only the
+  signed-in name on the device, never the password.
 
 ## How data is saved
 
-Everything is one shared JSON tree (`hq`) with `meta`, `chat`, `neighborhood`,
-`pins`, `topics` and `likes`.
+Everything is one shared JSON tree (`hq`) with `meta`, `accounts`, `chat`,
+`neighborhood`, `pins`, `topics` and `likes`.
 
 - `GET <backend>/hq.json` on every load, cached in `localStorage` so the device
   still works with no signal.
