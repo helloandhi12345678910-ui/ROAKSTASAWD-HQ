@@ -6,13 +6,13 @@
  *
  * Where to find the URL: Firebase console -> Build -> Realtime Database ->
  * the URL at the top of the data tab, e.g.
- *     https://roak-hq-default-rtdb.firebaseio.com
- * (or https://roak-hq-default-rtdb.europe-west1.firebasedatabase.app)
+ *     https://fr-roak-hq-fr-default-rtdb.firebaseio.com
+ * (a database outside us-central1 ends in .REGION.firebasedatabase.app)
  *
  * If you use a different backend that reads and writes a JSON document at
  * <url>/hq.json with plain GET and PUT, only "url" needs to change.
  */
 
 window.ROAK_BACKEND = {
-  url: 'https://YOUR-PROJECT-default-rtdb.firebaseio.com'
+  url: 'https://fr-roak-hq-fr-default-rtdb.firebaseio.com'
 };
