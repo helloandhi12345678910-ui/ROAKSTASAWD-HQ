@@ -30,8 +30,8 @@ nowhere near any of it.
 4. Location: pick the one nearest the group (e.g. `us-central1`).
 5. Security rules: choose **Start in test mode** for now (we replace it in step 2).
 6. Copy the URL shown at the top of the data tab. It looks like one of:
-   - `https://roak-hq-default-rtdb.firebaseio.com`
-   - `https://roak-hq-default-rtdb.europe-west1.firebasedatabase.app`
+   - `https://fr-roak-hq-fr-default-rtdb.firebaseio.com`
+   - `https://fr-roak-hq-fr-default-rtdb.europe-west1.firebasedatabase.app`
 
 ## 2. Put the rules in
 
@@ -58,7 +58,7 @@ press the pencil (Edit), put your URL between the quotes:
 
 ```js
 window.ROAK_BACKEND = {
-  url: 'https://roak-hq-default-rtdb.firebaseio.com'
+  url: 'https://fr-roak-hq-fr-default-rtdb.firebaseio.com'
 };
 ```
 
@@ -79,8 +79,9 @@ strip at the top says **LIVE · UPDATED …** when it is connected.
 4. Open `https://<your-url>/hq.json` in a browser: you should see the same posts
    as JSON.
 
-While the URL still says `YOUR-PROJECT`, the site runs on the device's own copy
-of the data and nothing is shared.
+The project name here is **fr-roak-hq-fr**. While the URL still says
+`YOUR-PROJECT`, the site runs on the device's own copy of the data and nothing is
+shared.
 
 ## How saving works
 
