@@ -81,3 +81,16 @@ python -m http.server 8000
 ```
 
 Then visit `http://localhost:8000/`.
+
+## Apps
+
+- **Chat** — live messages, everyone at once.
+- **Neighborhood** — longer posts.
+- **Pinboard** — permanent pins.
+- **Topics** — one thread per subject, with replies.
+- **AI Chat** — your own conversation with an AI. Set the helper's address in
+  `js/backend.js` (`ai:`); until then the page says the AI is not set up.
+- **Code** — write code in one box and run it. JavaScript and HTML/CSS run for real
+  in the page's own sandbox and preview; Python (print, variables, arithmetic,
+  if/else, for and while loops over range), JSON and SQL are read and checked in the
+  page, so nothing leaves the device.
