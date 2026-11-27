@@ -65,6 +65,8 @@ var ROAK = (function () {
     if (!d.topics) { d.topics = b.topics; }
     if (!d.pins) { d.pins = b.pins; }
     if (!d.likes) { d.likes = b.likes; }
+    if (!d.ai || typeof d.ai !== 'object' || !d.ai.msgs) { d.ai = { msgs: [] }; }
+    d.ai.msgs = list(d.ai.msgs);
     return d;
   }
 
@@ -84,6 +86,9 @@ var ROAK = (function () {
   }
 
   var tree = blank();
+  /* the AI chat is its own piece of the shared document (tree.ai), so a post
+     never undoes a message and a message never undoes a post */
+  var aiData = { msgs: [] };
   var state = 'start';   /* start | loading | ready | offline | empty */
   var lastError = '';
   var poller = null;
@@ -101,13 +106,50 @@ var ROAK = (function () {
     try { window.localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch (e) {}
   }
 
+  function syncAi() {
+    var a = tree && tree.ai ? tree.ai : null;
+    aiData = a && a.msgs ? a : { msgs: [] };
+    return aiData;
+  }
+
+  function aiSave(msgs) {
+    tree.ai = { msgs: msgs };
+    aiData = tree.ai;
+  }
+
   /* A stable fingerprint of everything a page shows, so a redraw only happens
      when something actually changed. */
   function sig(d) {
     try { return JSON.stringify(d); } catch (e) { return String((new Date()).getTime()); }
   }
 
-  /* Pull the shared copy into memory. Falls back to the local copy. */
+  /* Where the shared data sits: one document everyone reads and writes. */
+  var NODES = ['hq'];
+  var rooms = { hq: null };             /* room -> last copy read or written */
+  var isAi = false;                     /* the current route is the AI chat */
+
+  function roomUrl(name) {
+    return rootUrl() + name + '.json';
+  }
+
+  /* keep the copy we already have for a room that was not read this time */
+  function keepRoom(name, d) {
+    if (!d) { return; }
+    if (name === 'hq') {
+      tree = normalize(d);
+      localPut(tree);
+    }
+  }
+
+  function mergeRoom(name, d) {
+    var before = sig(tree);
+    tree = normalize(d);
+    localPut(tree);
+    return sig(tree) !== before;
+  }
+
+  /* Pull the shared copy (and the AI chat when that page is open) into memory.
+     Falls back to the local copy. */
   function pull(cb) {
     var cached = localGet();
     if (cached) { tree = normalize(cached); }
@@ -119,35 +161,73 @@ var ROAK = (function () {
     }
 
     if (state !== 'ready') { state = 'loading'; }
+
+    var names = isAi ? NODES : ['hq'];
+    var left = names.length;
+    var changed = false;
+
+    function finish() {
+      left--;
+      if (left > 0) { return; }
+      if (cb) { cb(changed); }
+    }
+
+    for (var i = 0; i < names.length; i++) {
+      fetchRoom(names[i], function (name, d, ok) {
+        if (ok && d) {
+          rooms[name] = d;
+          if (mergeRoom(name, d)) { changed = true; }
+          state = 'ready';
+        } else if (!ok) {
+          state = 'offline';
+          lastError = 'No connection';
+        } else if (!cached) {
+          state = 'empty';
+        }
+        finish();
+      });
+    }
+  }
+
+  function fetchRoom(name, cb) {
     var req = new XMLHttpRequest();
-    var url = rootUrl() + 'hq.json?ts=' + (new Date()).getTime();
+    var url = roomUrl(name) + '?ts=' + (new Date()).getTime();
     req.open('GET', url, true);
     req.onreadystatechange = function () {
       if (req.readyState !== 4) { return; }
-      var changed = false;
       if (req.status >= 200 && req.status < 300) {
         var d = null;
         try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
-        if (d) {
-          var before = sig(tree);
-          tree = normalize(d);
-          localPut(tree);
-          changed = sig(tree) !== before;
-          state = 'ready';
-        } else {
-          state = cached ? 'ready' : 'empty';
-        }
-      } else if (req.status === 0) {
-        state = 'offline';
-        lastError = 'No connection';
-      } else {
-        state = 'offline';
-        lastError = 'Server said ' + req.status;
+        cb(name, d, true);
+        return;
       }
-      if (cb) { cb(changed); }
+      cb(name, null, false);
     };
     try {
       req.send(null);
+    } catch (e) {
+      cb(name, null, false);
+    }
+  }
+
+  function writeRoom(name, data, cb) {
+    var req = new XMLHttpRequest();
+    req.open('PUT', roomUrl(name), true);
+    try { req.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
+    req.onreadystatechange = function () {
+      if (req.readyState !== 4) { return; }
+      if (req.status >= 200 && req.status < 300) {
+        state = 'ready';
+        lastError = '';
+        if (cb) { cb(true); }
+      } else {
+        state = 'offline';
+        lastError = req.status === 0 ? 'No connection' : 'Server said ' + req.status;
+        if (cb) { cb(false); }
+      }
+    };
+    try {
+      req.send(JSON.stringify(data));
     } catch (e) {
       state = 'offline';
       lastError = 'No connection';
@@ -155,7 +235,9 @@ var ROAK = (function () {
     }
   }
 
-  /* Read-modify-write the whole tree. change() edits the tree in place. */
+  /* Read-modify-write the whole shared tree. change() edits the tree in place.
+     The AI chat's own document is written back unchanged, so a post never
+     undoes a message sent in the AI chat. */
   function change(fn, cb) {
     pull(function () {
       var d = tree;
@@ -173,28 +255,7 @@ var ROAK = (function () {
         return;
       }
 
-      var req = new XMLHttpRequest();
-      req.open('PUT', rootUrl() + 'hq.json', true);
-      try { req.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
-      req.onreadystatechange = function () {
-        if (req.readyState !== 4) { return; }
-        if (req.status >= 200 && req.status < 300) {
-          state = 'ready';
-          lastError = '';
-          if (cb) { cb(true); }
-        } else {
-          state = 'offline';
-          lastError = req.status === 0 ? 'No connection' : 'Server said ' + req.status;
-          if (cb) { cb(false); }
-        }
-      };
-      try {
-        req.send(JSON.stringify(tree));
-      } catch (e) {
-        state = 'offline';
-        lastError = 'No connection';
-        if (cb) { cb(false); }
-      }
+      writeRoom('hq', tree, cb);
     });
   }
 
@@ -202,7 +263,7 @@ var ROAK = (function () {
 
   function fastRoute() {
     var r = route();
-    return r === 'chat' || r === 'home';
+    return r === 'chat' || r === 'home' || r === 'ai';
   }
 
   function refresh() {
@@ -217,7 +278,10 @@ var ROAK = (function () {
         if (box.innerHTML !== h) { box.innerHTML = h; }
       }
       if (!changed) { return; }
+      var r = route();
       if (r === 'chat') { softChat(); }
+      else if (r === 'ai') { softAi(); }
+      else if (r === 'code') { return; }   /* never redraw under someone typing code */
       else { renderSoft(); }
     });
   }
@@ -687,7 +751,9 @@ var ROAK = (function () {
     ['chat', 'Chat'],
     ['neighborhood', 'Neighborhood'],
     ['pinboard', 'Pinboard'],
-    ['topics', 'Topics']
+    ['topics', 'Topics'],
+    ['ai', 'AI Chat'],
+    ['code', 'Code']
   ];
 
   function shell(title, body) {
@@ -880,99 +946,108 @@ var ROAK = (function () {
     var pins = list(tree.pins);
     var topics = list(tree.topics);
     var accounts = list(tree.accounts);
+    var who = me();
     var body = '';
 
-    body += '<p class="lede">A headquarters for people reading on Amazon Kindles. ' +
-            'Plain pages, black and white, big buttons. If you can load it on a Kindle, ' +
-            'you are in the right place.</p>';
+    /* where you are */
+    if (who) {
+      body += '<div class="box tight"><p class="small" style="margin:0">' +
+        'Signed in as <b>' + esc(who) + '</b> &middot; ' +
+        '<a href="#" id="homeout">sign out</a></p></div>';
+    } else {
+      body += '<div class="box tight"><p class="small" style="margin:0">' +
+        'You are not signed in. You can read everything; sign in to post.' +
+        '</p><a class="btn" href="#" id="homein">Sign in</a> ' +
+        '<a class="btn" href="#" id="homeup">Make an account</a></div>';
+    }
 
     body += statusBox();
-    body += nameBox();
 
-    body += '<h2>Apps</h2>';
-    body += '<a class="topic" href="#chat"><span class="t">Chat</span>' +
-            '<span class="m">' + chat.length + ' message' + (chat.length === 1 ? '' : 's') + ' &middot; live</span></a>';
-    body += '<a class="topic" href="#neighborhood"><span class="t">Neighborhood</span>' +
-            '<span class="m">' + nb.length + ' post' + (nb.length === 1 ? '' : 's') + ' &middot; longer posts, slower pace</span></a>';
-    body += '<a class="topic" href="#pinboard"><span class="t">Pinboard</span>' +
-            '<span class="m">' + pins.length + ' pin' + (pins.length === 1 ? '' : 's') + ' &middot; the permanent board</span></a>';
-    body += '<a class="topic" href="#topics"><span class="t">Topics</span>' +
-            '<span class="m">' + topics.length + ' thread' + (topics.length === 1 ? '' : 's') + ' &middot; one subject per thread</span></a>';
+    /* the apps, as big tiles, two to a row on wider screens */
+    var tiles = [
+      ['chat', 'Chat', chat.length + ' message' + (chat.length === 1 ? '' : 's'), 'live, everyone at once'],
+      ['neighborhood', 'Neighborhood', nb.length + ' post' + (nb.length === 1 ? '' : 's'), 'longer posts, slower pace'],
+      ['pinboard', 'Pinboard', pins.length + ' pin' + (pins.length === 1 ? '' : 's'), 'the permanent board'],
+      ['topics', 'Topics', topics.length + ' thread' + (topics.length === 1 ? '' : 's'), 'one subject per thread'],
+      ['ai', 'AI Chat', 'ask the AI', 'your own conversation'],
+      ['code', 'Code', 'many languages', 'write and run code here']
+    ];
+    body += '<h2>Apps</h2><div class="tiles">';
+    for (var t = 0; t < tiles.length; t++) {
+      body += '<a class="tile" href="#' + tiles[t][0] + '">' +
+        '<span class="tt">' + esc(tiles[t][1]) + '</span>' +
+        '<span class="tn">' + esc(tiles[t][2]) + '</span>' +
+        '<span class="td">' + esc(tiles[t][3]) + '</span></a>';
+    }
+    body += '</div>';
 
+    /* what is happening */
+    body += '<h2>Right now</h2>';
+    var shown = 0;
     if (chat.length) {
       var last = chat[chat.length - 1];
-      body += '<h2>In chat right now</h2>' +
-        '<div class="post"><div class="post-meta"><span class="who">' + esc(last.by) +
-        '</span> &middot; ' + when(last.at) + '</div><div class="post-body">' + esc(last.text) + '</div></div>' +
-        '<a class="btn" href="#chat">Open chat</a>';
+      body += '<div class="post"><div class="post-meta"><span class="who">' + esc(last.by) +
+        '</span> &middot; in chat &middot; ' + when(last.at) + '</div>' +
+        '<div class="post-body">' + esc(last.text) + '</div></div>';
+      shown++;
     }
-
+    if (nb.length) {
+      var lp = nb[nb.length - 1];
+      body += '<div class="post"><div class="post-meta"><span class="who">' + esc(lp.by) +
+        '</span> &middot; in the neighborhood &middot; ' + when(lp.at) + '</div>' +
+        '<div class="post-body">' + esc(lp.text) + '</div></div>';
+      shown++;
+    }
     if (pins.length) {
-      body += '<h2>Latest pins</h2>';
-      var recent = pins.slice(pins.length - 3).reverse();
-      for (var i = 0; i < recent.length; i++) {
-        body += '<div class="post"><div class="post-meta"><span class="who">' + esc(recent[i].by) +
-                '</span> &middot; ' + when(recent[i].at) + '</div>' +
-                '<div class="post-body">' + esc(recent[i].text) + '</div></div>';
-      }
-      body += '<a class="btn" href="#pinboard">Open the pinboard</a>';
+      var lpin = pins[pins.length - 1];
+      body += '<div class="post"><div class="post-meta"><span class="who">' + esc(lpin.by) +
+        '</span> &middot; pinned &middot; ' + when(lpin.at) + '</div>' +
+        '<div class="post-body">' + esc(lpin.text) + '</div></div>';
+      shown++;
     }
+    if (topics.length) {
+      var lt = topics[topics.length - 1];
+      body += '<a class="topic" href="#topic?id=' + esc(lt.id) + '"><span class="t">' + esc(lt.title) +
+        '</span><span class="m">' + esc(lt.by) + ' &middot; ' + when(lt.at) +
+        ' &middot; ' + list(lt.replies).length + ' repl' + (list(lt.replies).length === 1 ? 'y' : 'ies') + '</span></a>';
+      shown++;
+    }
+    if (!shown) {
+      body += '<div class="empty"><b>Nothing posted yet.</b><br>' +
+        '<span class="small">Say hello in the chat, and this fills up.</span></div>';
+    }
+    body += '<a class="btn" href="#chat">Go to the chat</a>';
 
-    body += '<h2>Members</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
-      accounts.length + ' account' + (accounts.length === 1 ? '' : 's') + ': ' +
-      (accounts.length ? esc(namesOf(accounts)) : 'none yet &mdash; make the first one.') +
+    /* who is here */
+    body += '<h2>Members</h2><div class="box tight"><p class="small" style="margin:0">' +
+      (accounts.length
+        ? accounts.length + ' account' + (accounts.length === 1 ? '' : 's') + ': ' + esc(namesOf(accounts))
+        : 'No accounts yet &mdash; make the first one.') +
       '</p></div>';
 
-    body += '<h2>How this place works</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
-      '<b>One column, no scrolling sideways.</b> Everything is a single column of blocks so the ' +
-      'Kindle does not have to guess where you are.<br><br>' +
-      '<b>No images.</b> A Kindle repaints the whole screen for a picture. Text is faster.<br><br>' +
-      '<b>Tap targets are big.</b> Buttons are at least 44px tall.<br><br>' +
-      '<b>Live.</b> Chat refreshes every second, the rest every five. A post made on one Kindle ' +
-      'shows up on the others without reloading.<br><br>' +
-      '<b>Saved for everyone.</b> Accounts, chat, posts, pins and topics are kept on the server.' +
+    /* how it works, kept short */
+    body += '<h2>How this place works</h2><div class="box tight"><p class="small" style="margin:0">' +
+      'One column, no sideways scrolling. No images, because a Kindle repaints the whole screen for one. ' +
+      'Buttons are big enough for a thumb. Chat refreshes every second, the rest every five. ' +
+      'Everything is saved for everyone.' +
       '</p></div>';
 
     shell('HQ', body);
-    wireStart();
-  }
 
-  function namesOf(accs) {
-    var out = [];
-    for (var i = 0; i < accs.length; i++) { out.push(accs[i].name); }
-    return out.join(', ');
-  }
-
-  /* ----- chat ----- */
-
-  function chatShown() {
-    var shown = CHAT_SHOWN;
-    try {
-      var v = parseInt(window.localStorage.getItem(VIEW_KEY), 10);
-      if (v && v > shown) { shown = v; }
-    } catch (e) {}
-    return shown;
-  }
-
-  function chatLogHtml() {
-    var all = list(tree.chat);
-    var msgs = all.slice(Math.max(0, all.length - chatShown()));
-    var log = '';
-    var i;
-    if (!msgs.length) {
-      return '<div class="empty"><b>No messages yet.</b><br><span class="small">Say hello.</span></div>';
+    var bi = document.getElementById('homein');
+    if (bi) { bi.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
+    var bu = document.getElementById('homeup');
+    if (bu) { bu.onclick = function (e) { e.preventDefault(); openSignin('up'); return false; }; }
+    var bo = document.getElementById('homeout');
+    if (bo) {
+      bo.onclick = function (e) {
+        e.preventDefault();
+        setMe('');
+        render();
+        toast('Signed out');
+        return false;
+      };
     }
-    for (i = 0; i < msgs.length; i++) {
-      var m = msgs[i];
-      log += '<div class="msg' + (m.by === me() ? ' me' : '') + '">' +
-        '<span class="who">' + esc(m.by) + '</span>' +
-        '<span class="when" data-at="' + (m.at || 0) + '">' + when(m.at) + '</span>' +
-        '<div class="text">' + esc(m.text) + '</div>' +
-      '</div>';
-    }
-    return log;
   }
 
   function pageChat() {
@@ -1381,15 +1456,503 @@ var ROAK = (function () {
     };
   }
 
+  /* ----- AI chat ----- */
+
+  function aiMsgs() {
+    syncAi();
+    return aiData.msgs;
+  }
+
+  /* Ask the AI through the helper service the site is set up with. Nothing is
+     sent anywhere else, and the conversation is only ever your own. */
+  function askAi(question, history, done) {
+    var b = backend();
+    if (!b || !b.ai || String(b.ai).indexOf('http') !== 0 || String(b.ai).indexOf('YOUR-') === 0) {
+      done('The AI is not set up yet. The owner of the site has to add its address in js/backend.js.', null);
+      return;
+    }
+    var body = { question: question, history: history.slice(-10), user: me() };
+    var req = new XMLHttpRequest();
+    req.open('POST', b.ai, true);
+    try { req.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
+    req.onreadystatechange = function () {
+      if (req.readyState !== 4) { return; }
+      if (req.status >= 200 && req.status < 300) {
+        var d = null;
+        try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
+        if (d && d.answer) { done(null, String(d.answer)); }
+        else { done('The AI sent back something this page could not read.', null); }
+        return;
+      }
+      done('The AI could not be reached just now (' + req.status + ').', null);
+    };
+    try { req.send(JSON.stringify(body)); }
+    catch (e) { done('No connection.', null); }
+  }
+
+  function aiLogHtml() {
+    var msgs = aiMsgs();
+    if (!msgs.length) {
+      return '<div class="empty"><b>Ask the AI anything.</b><br><span class="small">' +
+        'Only you can read this conversation.</span></div>';
+    }
+    var h = '';
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      h += '<div class="msg' + (m.by === 'ai' ? '' : ' me') + '">' +
+        '<span class="who">' + (m.by === 'ai' ? 'AI' : esc(m.by || 'you')) + '</span>' +
+        '<span class="when">' + when(m.at) + '</span>' +
+        '<div class="text">' + esc(m.text) + '</div>' +
+      '</div>';
+    }
+    return h;
+  }
+
+  function pageAi() {
+    var body = '';
+    body += statusBox();
+    body += nameBox();
+    body += '<div class="box tight"><p class="small" style="margin:0">' +
+      '<b>Your own conversation with the AI.</b> It is kept in its own place in the ' +
+      'database, separate from the shared boards, and only the page here shows it.' +
+      '</p></div>';
+    body += '<div class="chatlog" id="ailog">' + aiLogHtml() + '</div>';
+    body += '<div class="chatform">' +
+      '<form id="aiform" action="#ai">' +
+        '<label for="aitext">Question</label>' +
+        '<textarea id="aitext" maxlength="2000"></textarea>' +
+        '<button class="btn wide" type="submit" id="aigo">Ask</button>' +
+        '<button class="btn wide" type="button" id="aiclear">Clear this conversation</button>' +
+      '</form>' +
+    '</div>';
+
+    shell('AI Chat', body);
+    wireStart();
+    var lg = document.getElementById('ailog');
+    if (lg) { lg.scrollTop = lg.scrollHeight; }
+
+    document.getElementById('aiclear').onclick = function () {
+      if (!needName()) { return; }
+      aiSave([]);
+      change(function (d) { d.ai = { msgs: [] }; }, function () { render(); toast('Cleared'); });
+    };
+
+    document.getElementById('aiform').onsubmit = function (e) {
+      e.preventDefault();
+      if (!needName()) { return false; }
+      var q = trim(document.getElementById('aitext').value);
+      if (!q) { toast('Type a question'); return false; }
+      document.getElementById('aitext').value = '';
+
+      var history = aiMsgs().slice(-10);
+      var now = (new Date()).getTime();
+      var mine = { id: newId('q'), by: me(), text: q, at: now };
+      aiSave(aiMsgs().concat([mine]));
+      var lg2 = document.getElementById('ailog');
+      if (lg2) {
+        if (lg2.getElementsByClassName('empty').length) { lg2.innerHTML = ''; }
+        lg2.innerHTML += '<div class="msg me"><span class="who">' + esc(me()) +
+          '</span><span class="when">just now</span><div class="text">' + esc(q) + '</div></div>' +
+          '<div class="msg" id="thinking"><span class="who">AI</span><div class="text">Thinking&hellip;</div></div>';
+        lg2.scrollTop = lg2.scrollHeight;
+      }
+      var go = document.getElementById('aigo');
+      if (go) { go.disabled = true; go.innerHTML = 'Thinking&hellip;'; }
+
+      askAi(q, history, function (err, answer) {
+        if (go) { go.disabled = false; go.innerHTML = 'Ask'; }
+        var reply = err
+          ? { id: newId('r'), by: 'ai', text: err, at: (new Date()).getTime(), failed: 1 }
+          : { id: newId('r'), by: 'ai', text: answer, at: (new Date()).getTime() };
+        var withReply = aiMsgs().concat([reply]);
+        aiSave(withReply);
+        change(function (d) { d.ai = { msgs: withReply }; }, function () {
+          if (err) { render(); toast('No answer — see the message'); }
+          else { softAi(); }
+        });
+      });
+      return false;
+    };
+  }
+
+  /* redraw only the AI log, leaving the question box alone */
+  function softAi() {
+    var lg = document.getElementById('ailog');
+    if (!lg) { render(); return; }
+    var atEnd = (lg.scrollHeight - lg.scrollTop - lg.clientHeight) < 40;
+    var h = aiLogHtml();
+    if (lg.innerHTML !== h) {
+      lg.innerHTML = h;
+      if (atEnd) { lg.scrollTop = lg.scrollHeight; }
+    }
+    var stamp = document.getElementById('live');
+    if (stamp) { stamp.innerHTML = stampLine(); }
+  }
+
+  /* ----- Code app: one box, many languages, runs in the browser ----- */
+
+  var LANGS = [
+    ['javascript', 'JavaScript'],
+    ['html', 'HTML + CSS'],
+    ['css', 'CSS only'],
+    ['json', 'JSON'],
+    ['python', 'Python'],
+    ['sql', 'SQL'],
+    ['text', 'Anything']
+  ];
+
+  var SAMPLES = {
+    javascript: 'var out = [];\nfor (var i = 1; i <= 15; i++) {\n  if (i % 15 === 0) out.push("FizzBuzz");\n  else if (i % 3 === 0) out.push("Fizz");\n  else if (i % 5 === 0) out.push("Buzz");\n  else out.push(i);\n}\nreturn out.join(" ");',
+    html: '<h1>Hello from the HQ</h1>\n<p>A page made on a Kindle.</p>\n<style>\n  body { font-family: Helvetica, Arial, sans-serif; }\n  h1 { font-size: 20px; }\n</style>',
+    css: 'body { font-family: Helvetica, Arial, sans-serif; }\nh1 { font-size: 20px; border-bottom: 3px solid #000; }\np { font-size: 16px; }',
+    json: '{\n  "name": "ROAKSTASAWD",\n  "kindle": true,\n  "members": 5\n}',
+    python: 'total = 0\nfor n in range(1, 11):\n    total = total + n\nprint("The sum of 1 to 10 is " + str(total))',
+    sql: 'SELECT name, at\nFROM accounts\nORDER BY at DESC;',
+    text: 'Write anything here. The preview shows it as plain text.'
+  };
+
+  function langOf(v) {
+    for (var i = 0; i < LANGS.length; i++) {
+      if (LANGS[i][0] === v) { return v; }
+    }
+    return 'javascript';
+  }
+
+  /* Runs JavaScript in a sandbox and collects what it logs or returns. */
+  function runJs(code, out, frame) {
+    var logs = [];
+    function joinArgs(args) {
+      var parts = [];
+      for (var k = 0; k < args.length; k++) {
+        var v = args[k];
+        if (typeof v === 'object') {
+          try { parts.push(JSON.stringify(v)); } catch (e) { parts.push(String(v)); }
+        } else { parts.push(String(v)); }
+      }
+      return parts.join(' ');
+    }
+    var fake = {
+      log: function () { logs.push(joinArgs(arguments)); },
+      error: function () { logs.push(joinArgs(arguments)); },
+      warn: function () { logs.push(joinArgs(arguments)); }
+    };
+    var pdoc = null;
+    try {
+      pdoc = frame.contentDocument || frame.contentWindow.document;
+      pdoc.open();
+      pdoc.write('<!DOCTYPE html><html><head><style>' +
+        'body{font-family:Helvetica,Arial,sans-serif;font-size:16px;margin:10px;color:#000;background:#fff}' +
+        'h1{font-size:20px}</style></head><body></body></html>');
+      pdoc.close();
+    } catch (e) { pdoc = null; }
+
+    var result;
+    var err = null;
+    try {
+      var f = new Function('console', 'preview', '"use strict";\n' + code);
+      result = f(fake, pdoc);
+    } catch (e2) {
+      err = e2 && e2.message ? e2.message : String(e2);
+    }
+    var text = '';
+    if (logs.length) { text += logs.join('\n') + '\n'; }
+    if (err) { text += 'Error: ' + err; }
+    else if (result !== undefined) { text += String(result); }
+    out.innerHTML = esc(text || '(no output)');
+  }
+
+  /* Python is not in any Kindle browser, so this reads a useful part of it:
+     print(), str(), len(), int(), variables, arithmetic, if/else and for and
+     while loops over range(). */
+  function runPy(code, out) {
+    var lines = String(code).replace(/\r/g, '').split('\n');
+    var vars = {};
+    var printed = [];
+    var guard = 0;
+
+    function strip(expr) {
+      expr = String(expr).replace(/^\s+|\s+$/g, '');
+      var m;
+      while ((m = expr.match(/^(str|int|float|len)\s*\(([\s\S]*)\)$/))) {
+        var inner = val(m[2]);
+        if (m[1] === 'str') { return String(inner); }
+        if (m[1] === 'len') { return String(String(inner).length); }
+        if (m[1] === 'int') { return String(parseInt(inner, 10) || 0); }
+        return String(parseFloat(inner) || 0);
+      }
+      return expr;
+    }
+
+    function val(expr) {
+      expr = String(expr).replace(/^\s+|\s+$/g, '');
+      if (!expr) { return ''; }
+      if (/^(['"])[\s\S]*\1$/.test(expr)) { return expr.slice(1, -1); }
+      if (expr === 'True') { return true; }
+      if (expr === 'False') { return false; }
+      if (/^-?\d+(\.\d+)?$/.test(expr)) { return parseFloat(expr); }
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(expr)) {
+        return vars.hasOwnProperty(expr) ? vars[expr] : 0;
+      }
+      if (expr.indexOf('+') > 0) {
+        var bits = expr.split('+');
+        var parts = [];
+        for (var bi = 0; bi < bits.length; bi++) { parts.push(strip(bits[bi])); }
+        var vals = [];
+        var allNum = true;
+        for (var i = 0; i < parts.length; i++) {
+          var v = val(parts[i]);
+          if (typeof v !== 'number') { allNum = false; }
+          vals.push(v);
+        }
+        if (allNum) {
+          var sum = 0;
+          for (var j = 0; j < vals.length; j++) { sum += vals[j]; }
+          return sum;
+        }
+        var str = '';
+        for (var k = 0; k < vals.length; k++) { str += show(vals[k]); }
+        return str;
+      }
+      if (/^[-\d\s.()*/%]+$/.test(expr)) {
+        try { return eval(expr); } catch (e) { return 0; }
+      }
+      var mm = expr.match(/^(.+?)\s*([-*\/])\s*(.+)$/);
+      if (mm) {
+        var left = val(mm[1]);
+        var right = val(mm[3]);
+        var a = Number(left) || 0;
+        var b = Number(right) || 0;
+        if (mm[2] === '-') { return a - b; }
+        if (mm[2] === '*') { return a * b; }
+        return b ? a / b : 0;
+      }
+      return 0;
+    }
+
+    function show(v) {
+      if (typeof v === 'number' && !isFinite(v)) { return String(v); }
+      if (v === true) { return 'True'; }
+      if (v === false) { return 'False'; }
+      return String(v);
+    }
+
+    /* run exactly the lines [from, to) as a block at `indent` */
+    function runRange(indent, from, to) {
+      var saved = lines;
+      lines = saved.slice(from, to);
+      runBlock(indent, 0);
+      lines = saved;
+    }
+
+    function indentOf(line) {
+      var l = line.replace(/\t/g, '    ');
+      return l.length - l.replace(/^ +/, '').length;
+    }
+
+    /* run the lines from i while they are deeper than `indent`; returns where
+       the block stops */
+    function runBlock(indent, i) {
+      while (i < lines.length) {
+        var raw = lines[i];
+        var line = raw.replace(/\t/g, '    ');
+        if (!line.replace(/\s/g, '')) { i++; continue; }
+        var ind = indentOf(line);
+        if (ind < indent) { return i; }
+        if (++guard > 20000) { printed.push('(stopped: too much to run)'); return lines.length; }
+
+        var c = line.replace(/^\s+/, '').replace(/\s+#.*$/, '');
+        var m;
+
+        if ((m = c.match(/^print\s*\(([\s\S]*)\)$/))) {
+          var args = m[1].split(',');
+          var outs = [];
+          for (var a = 0; a < args.length; a++) { outs.push(show(val(args[a]))); }
+          printed.push(outs.join(' '));
+          i++;
+          continue;
+        }
+        if ((m = c.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\+=\s*([\s\S]+)$/))) {
+          vars[m[1]] = val(strip(m[1]) + '+' + strip(m[2]));
+          i++;
+          continue;
+        }
+        if ((m = c.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]+)$/))) {
+          vars[m[1]] = val(m[2]);
+          i++;
+          continue;
+        }
+        if ((m = c.match(/^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+range\s*\(([^)]*)\)\s*:$/))) {
+          var ra = m[2].split(',');
+          var from = 0, to = 0, step = 1;
+          if (ra.length === 1) { to = Number(val(ra[0])); }
+          else if (ra.length === 2) { from = Number(val(ra[0])); to = Number(val(ra[1])); }
+          else { from = Number(val(ra[0])); to = Number(val(ra[1])); step = Number(val(ra[2])) || 1; }
+          var bodyStart = i + 1;
+          var bodyEnd = bodyStart;
+          while (bodyEnd < lines.length) {
+            var l2 = lines[bodyEnd].replace(/\t/g, '    ');
+            if (l2.replace(/\s/g, '') && indentOf(l2) <= ind) { break; }
+            bodyEnd++;
+          }
+          for (var n = from; step > 0 ? n < to : n > to; n += step) {
+            vars[m[1]] = n;
+            runRange(ind + 1, bodyStart, bodyEnd);
+            if (guard > 20000) { break; }
+          }
+          i = bodyEnd;
+          continue;
+        }
+        if ((m = c.match(/^while\s+([\s\S]+):$/))) {
+          var wStart = i + 1;
+          var wEnd = wStart;
+          while (wEnd < lines.length) {
+            var l3 = lines[wEnd].replace(/\t/g, '    ');
+            if (l3.replace(/\s/g, '') && indentOf(l3) <= ind) { break; }
+            wEnd++;
+          }
+          while (val(m[1]) && guard < 20000) { runRange(ind + 1, wStart, wEnd); }
+          i = wEnd;
+          continue;
+        }
+        if ((m = c.match(/^if\s+([\s\S]+):$/))) {
+          var taken = !!val(m[1]);
+          var iEnd = i + 1;
+          var alt = -1;
+          while (iEnd < lines.length) {
+            var l4 = lines[iEnd].replace(/\t/g, '    ');
+            if (l4.replace(/\s/g, '') && indentOf(l4) <= ind) { break; }
+            if (/^\s*else\s*:/.test(l4)) { alt = iEnd; }
+            iEnd++;
+          }
+          if (taken) { runBlock(ind + 1, i + 1); }
+          else if (alt >= 0) { runBlock(ind + 1, alt + 1); }
+          i = iEnd;
+          continue;
+        }
+        i++;
+      }
+      return i;
+    }
+
+    runBlock(0, 0);
+    out.innerHTML = esc(printed.length ? printed.join('\n') : '(no output)');
+  }
+
+  function checkJson(code, out) {
+    try {
+      var v = JSON.parse(code);
+      out.innerHTML = esc('Valid JSON.\n\n' + JSON.stringify(v, null, 2));
+    } catch (e) {
+      out.innerHTML = esc('Not valid JSON: ' + (e && e.message ? e.message : e));
+    }
+  }
+
+  function pageCode() {
+    var lang = langOf(qs('lang'));
+    var body = '';
+    var i;
+    body += '<p class="small dim">Pick a language, write code, tap Run. JavaScript and HTML/CSS ' +
+            'run for real in the preview; Python, SQL and JSON are read and checked here in the page, ' +
+            'so nothing leaves your device.</p>';
+    body += '<div class="chips" id="langs">';
+    for (i = 0; i < LANGS.length; i++) {
+      body += '<a href="#code?lang=' + LANGS[i][0] + '"' +
+        (LANGS[i][0] === lang ? ' class="on"' : '') + '>' + esc(LANGS[i][1]) + '</a>';
+    }
+    body += '</div>';
+    body += '<label for="code">' + esc(langName(lang)) + '</label>';
+    body += '<textarea class="codearea" id="code" spellcheck="false" autocorrect="off" autocapitalize="off">' +
+            esc(SAMPLES[lang]) + '</textarea>';
+    body += '<button class="btn" type="button" id="run">Run</button>' +
+            '<button class="btn" type="button" id="clearcode">Clear</button>';
+    body += '<h2>Output</h2><pre class="out" id="out">(nothing yet)</pre>';
+    body += '<h2>Preview</h2><iframe class="preview" id="preview" title="preview"></iframe>';
+    body += '<div class="box tight"><p class="small" style="margin:0">' +
+            '<b>JavaScript:</b> <code>return</code> sends a value to Output, <code>console.log</code> is ' +
+            'collected, and <code>preview</code> is a blank page you can write to. ' +
+            '<b>Python:</b> print, variables, arithmetic, if/else, for and while loops work. ' +
+            '<b>SQL:</b> shown as text — the HQ keeps its data as JSON, not tables.</p></div>';
+
+    shell('Code', body);
+
+    var frame = document.getElementById('preview');
+    try {
+      var doc = frame.contentDocument || frame.contentWindow.document;
+      doc.open();
+      doc.write('<!DOCTYPE html><html><head><style>body{font-family:Helvetica,Arial,sans-serif;' +
+        'font-size:16px;margin:10px;color:#000;background:#fff}h1{font-size:20px}</style></head>' +
+        '<body><p>Preview is empty.</p></body></html>');
+      doc.close();
+    } catch (e) {}
+
+    function run() {
+      var code = document.getElementById('code').value;
+      var out = document.getElementById('out');
+      if (lang === 'javascript') { runJs(code, out, frame); return; }
+      if (lang === 'python') { runPy(code, out); return; }
+      if (lang === 'json') { checkJson(code, out); return; }
+      if (lang === 'sql') {
+        out.innerHTML = esc('SQL is not run here — there is no database to run it against.\n' +
+          'The HQ stores everything as JSON, so SQL would have nothing to query.\n\n' +
+          'Your statement:\n' + code);
+        return;
+      }
+      if (lang === 'css') {
+        try {
+          var cd = frame.contentDocument || frame.contentWindow.document;
+          cd.open();
+          cd.write('<!DOCTYPE html><html><head><style>' + code + '</style></head><body>' +
+            '<h1>Style preview</h1><p>This text is here so your CSS has something to style. ' +
+            'A list:</p><ul><li>one</li><li>two</li><li>three</li></ul></body></html>');
+          cd.close();
+          out.innerHTML = esc('CSS applied to the preview.');
+        } catch (e) { out.innerHTML = esc('Could not draw the preview.'); }
+        return;
+      }
+      if (lang === 'text') {
+        out.innerHTML = esc(code);
+        return;
+      }
+      /* html */
+      try {
+        var hd = frame.contentDocument || frame.contentWindow.document;
+        hd.open();
+        hd.write('<!DOCTYPE html><html><head><style>body{font-family:Helvetica,Arial,sans-serif;' +
+          'font-size:16px;margin:10px;color:#000;background:#fff}</style></head><body>' +
+          code + '</body></html>');
+        hd.close();
+        out.innerHTML = esc('Drawn in the preview.');
+      } catch (e) {
+        out.innerHTML = esc('Could not draw the preview.');
+      }
+    }
+
+    document.getElementById('run').onclick = run;
+    document.getElementById('clearcode').onclick = function () {
+      document.getElementById('code').value = '';
+      document.getElementById('out').innerHTML = '(nothing yet)';
+    };
+  }
+
+  function langName(v) {
+    for (var i = 0; i < LANGS.length; i++) {
+      if (LANGS[i][0] === v) { return LANGS[i][1]; }
+    }
+    return 'Code';
+  }
+
   /* ---------- boot ---------- */
 
   function render() {
     var r = route();
+    isAi = (r === 'ai');
     closeSignin();
     if (r === 'chat') { pageChat(); }
     else if (r === 'neighborhood') { pageNeighborhood(); }
     else if (r === 'pinboard') { pagePinboard(); }
     else if (r === 'topics') { pageTopics(); }
+    else if (r === 'ai') { pageAi(); }
+    else if (r === 'code') { pageCode(); }
     else { pageHome(); }
   }
 
@@ -1429,7 +1992,11 @@ var ROAK = (function () {
     signOut: function () { setMe(''); },
     esc: esc,
     toast: toast,
-    cloudOn: cloudOn
+    cloudOn: cloudOn,
+    /* exposed for testing the Code app's runners from Node */
+    runPy: runPy,
+    runJs: runJs,
+    checkJson: checkJson
   };
 })();
 
