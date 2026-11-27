@@ -133,6 +133,69 @@ body {
   color: #444444;
 }
 
+/* Room tabs inside an app (Chat: global / direct messages) with a + in the corner */
+.subtabs {
+  border: 2px solid #000000;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+.subtabs .subtab {
+  float: left;
+  display: block;
+  color: #000000;
+  text-decoration: none;
+  font-weight: bold;
+  font-size: 15px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 12px 10px;
+  min-height: 44px;
+  line-height: 20px;
+  border-right: 2px solid #000000;
+}
+.subtabs .subtab.on,
+.subtabs .subtab:active {
+  background: #000000;
+  color: #ffffff;
+}
+.subtabs .tag {
+  font-size: 12px;
+  font-weight: normal;
+  border: 1px solid #000000;
+  padding: 0 5px;
+  margin-left: 6px;
+  vertical-align: 2px;
+}
+.subtabs .subtab.on .tag {
+  border-color: #ffffff;
+}
+.subtabs .plus {
+  float: right;
+  display: block;
+  width: 46px;
+  min-height: 44px;
+  line-height: 40px;
+  text-align: center;
+  font-size: 26px;
+  font-weight: bold;
+  color: #000000;
+  text-decoration: none;
+  border-left: 2px solid #000000;
+}
+.subtabs .plus:active {
+  background: #000000;
+  color: #ffffff;
+}
+
+/* The sheet behind the + button */
+.overlay .sheet {
+  background: #ffffff;
+  border: 2px solid #000000;
+  padding: 14px;
+  max-width: 700px;
+  margin: 12px auto;
+}
+
 /* Picking favourites */
 .pick {
   display: block;
