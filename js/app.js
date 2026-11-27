@@ -1,57 +1,225 @@
 /* ROAKSTASAWD HQ — shared engine
    Written for old browsers: ES5 only, no fetch, no arrow functions,
-   no template literals, no let/const. Works on Kindle's experimental browser. */
+   no template literals, no let/const. Works on Kindle's experimental browser.
+
+   Data lives in one JSON tree shared by everyone. Two backends can hold it:
+     - "local":  this device's localStorage (offline copy, always kept)
+     - "cloud":  any HTTP backend with GET/PUT of a JSON document.
+                 Firebase Realtime Database is the one set up in js/backend.js.
+   Every write reads the latest copy, changes its own piece, and puts it back,
+   so nobody's post is overwritten by a stale page. */
 
 var ROAK = (function () {
 
-  var STORE_KEY = 'roak.v1';
-  var ME_KEY = 'roak.me';
+  var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
+  var ME_KEY = 'roak.me';          /* this device's display name */
+  var VIEW_KEY = 'roak.view';      /* how many chat messages to show */
+  var CHAT_SHOWN = 100;            /* chat messages rendered at once */
+  var KEEP_CHAT = 300;             /* chat messages kept in the database */
 
-  /* ---------- storage ---------- */
+  /* ---------- backend selection ---------- */
+
+  function backend() {
+    var b = window.ROAK_BACKEND;
+    if (b && b.url && b.url.indexOf('http') === 0 && b.url.indexOf('YOUR-') < 0) {
+      return b;
+    }
+    return null;
+  }
+
+  function cloudOn() {
+    return backend() !== null;
+  }
+
+  function rootUrl() {
+    var u = backend().url;
+    if (u.charAt(u.length - 1) !== '/') { u += '/'; }
+    return u;
+  }
+
+  /* ---------- the tree ---------- */
 
   function blank() {
     return {
+      meta: { updated: 0, by: '' },
       chat: [],
       neighborhood: [],
       topics: [],
-      likes: [],
-      seq: 1
+      pins: [],
+      likes: []
     };
   }
 
-  function load() {
+  function normalize(d) {
+    if (!d || typeof d !== 'object') { d = {}; }
+    var b = blank();
+    if (!d.meta || typeof d.meta !== 'object') { d.meta = b.meta; }
+    if (!d.chat || !d.chat.length && typeof d.chat !== 'object') { d.chat = b.chat; }
+    if (!d.neighborhood) { d.neighborhood = b.neighborhood; }
+    if (!d.topics) { d.topics = b.topics; }
+    if (!d.pins) { d.pins = b.pins; }
+    if (!d.likes) { d.likes = b.likes; }
+    return d;
+  }
+
+  /* Realtime Database gives back an object keyed by push id, not an array */
+  function list(v) {
+    if (!v) { return []; }
+    if (v.length !== undefined) { return v; }
+    var out = [];
+    for (var k in v) {
+      if (v.hasOwnProperty(k) && v[k] && typeof v[k] === 'object') {
+        if (!v[k].id) { v[k].id = k; }
+        out.push(v[k]);
+      }
+    }
+    out.sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+    return out;
+  }
+
+  var tree = blank();
+  var state = 'start';   /* start | loading | ready | offline | empty */
+  var lastError = '';
+  var pending = null;    /* what the user was trying to send */
+  var poller = null;
+
+  function localGet() {
     var raw = null;
-    try { raw = window.localStorage.getItem(STORE_KEY); } catch (e) { raw = null; }
-    if (!raw) { return blank(); }
-    var d;
-    try { d = JSON.parse(raw); } catch (e) { d = null; }
-    if (!d || typeof d !== 'object') { d = blank(); }
-    if (!d.chat) { d.chat = []; }
-    if (!d.neighborhood) { d.neighborhood = []; }
-    if (!d.topics) { d.topics = []; }
-    if (!d.likes) { d.likes = []; }
-    if (!d.seq) { d.seq = 1; }
-    return d;
+    try { raw = window.localStorage.getItem(LS_KEY); } catch (e) { raw = null; }
+    if (!raw) { return null; }
+    try { return JSON.parse(raw); } catch (e) { return null; }
   }
 
-  function save(d) {
-    try { window.localStorage.setItem(STORE_KEY, JSON.stringify(d)); } catch (e) {}
+  function localPut(d) {
+    try { window.localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch (e) {}
   }
 
-  function db() {
-    var d = load();
-    return d;
+  function mergeLists(remote, local) {
+    var seen = {};
+    var out = [];
+    var i;
+    for (i = 0; i < remote.length; i++) {
+      if (remote[i] && remote[i].id) { seen[remote[i].id] = 1; }
+      out.push(remote[i]);
+    }
+    for (i = 0; i < local.length; i++) {
+      if (local[i] && local[i].id && !seen[local[i].id]) { out.push(local[i]); }
+    }
+    out.sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
+    return out;
   }
 
-  function commit(d) {
-    save(d);
-    return d;
+  /* Pull the shared copy into memory. Falls back to the local copy. */
+  function pull(cb) {
+    var cached = localGet();
+    if (cached) { tree = normalize(cached); }
+
+    if (!cloudOn()) {
+      state = cached ? 'ready' : 'empty';
+      if (cb) { cb(); }
+      return;
+    }
+
+    state = 'loading';
+    var req = new XMLHttpRequest();
+    var url = rootUrl() + 'hq.json?ts=' + (new Date()).getTime();
+    req.open('GET', url, true);
+    req.onreadystatechange = function () {
+      if (req.readyState !== 4) { return; }
+      if (req.status >= 200 && req.status < 300) {
+        var d = null;
+        try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
+        if (d) {
+          tree = normalize(d);
+          localPut(tree);
+          state = 'ready';
+        } else {
+          state = cached ? 'ready' : 'empty';
+        }
+      } else if (req.status === 0) {
+        state = cached ? 'offline' : 'offline';
+        lastError = 'No connection';
+      } else {
+        state = cached ? 'offline' : 'offline';
+        lastError = 'Server said ' + req.status;
+      }
+      if (cb) { cb(); }
+    };
+    try {
+      req.send(null);
+    } catch (e) {
+      state = cached ? 'offline' : 'offline';
+      lastError = 'No connection';
+      if (cb) { cb(); }
+    }
   }
 
-  function nextId(d) {
-    var id = d.seq || 1;
-    d.seq = id + 1;
-    return 'p' + id;
+  /* Read-modify-write the whole tree. change() edits the tree in place. */
+  function change(fn, cb) {
+    pull(function () {
+      var d = tree;
+      fn(d);
+      d.meta = { updated: (new Date()).getTime(), by: me() };
+      if (d.chat.length > KEEP_CHAT) {
+        d.chat = d.chat.slice(d.chat.length - KEEP_CHAT);
+      }
+      tree = d;
+      localPut(tree);
+
+      if (!cloudOn()) {
+        state = 'ready';
+        if (cb) { cb(true); }
+        return;
+      }
+
+      var req = new XMLHttpRequest();
+      req.open('PUT', rootUrl() + 'hq.json', true);
+      try { req.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
+      req.onreadystatechange = function () {
+        if (req.readyState !== 4) { return; }
+        if (req.status >= 200 && req.status < 300) {
+          state = 'ready';
+          lastError = '';
+          if (cb) { cb(true); }
+        } else {
+          state = 'offline';
+          lastError = req.status === 0 ? 'No connection' : 'Server said ' + req.status;
+          if (cb) { cb(false); }
+        }
+      };
+      try {
+        req.send(JSON.stringify(tree));
+      } catch (e) {
+        state = 'offline';
+        lastError = 'No connection';
+        if (cb) { cb(false); }
+      }
+    });
+  }
+
+  function startPolling() {
+    if (poller || !cloudOn()) { return; }
+    poller = window.setInterval(function () {
+      var r = route();
+      if (r !== 'chat' && r !== 'neighborhood' && r !== 'topics' && r !== 'pinboard' && r !== 'home') { return; }
+      pull(function () {
+        var box = document.getElementById('live');
+        if (!box) { return; }
+        var h = stampLine();
+        if (box.innerHTML !== h) {
+          box.innerHTML = h;
+          renderSoft();
+        }
+      });
+    }, 20000);
+  }
+
+  function stampLine() {
+    var t = tree.meta && tree.meta.updated ? tree.meta.updated : 0;
+    return '<span class="dot"></span>' +
+      (state === 'offline'
+        ? 'Offline — showing the copy on this device'
+        : 'Live · updated ' + when(t) + (tree.meta && tree.meta.by ? ' by ' + esc(tree.meta.by) : ''));
   }
 
   /* ---------- me ---------- */
@@ -59,8 +227,7 @@ var ROAK = (function () {
   function me() {
     var n = null;
     try { n = window.localStorage.getItem(ME_KEY); } catch (e) {}
-    if (n) { return n; }
-    return '';
+    return n || '';
   }
 
   function setMe(name) {
@@ -72,10 +239,9 @@ var ROAK = (function () {
     return name;
   }
 
-  function needName(where) {
+  function needName() {
     if (me()) { return true; }
-    document.getElementById('signin').style.display = 'block';
-    window.location.hash = '';
+    openSignin();
     toast('Pick a name first');
     return false;
   }
@@ -95,13 +261,21 @@ var ROAK = (function () {
   }
 
   function when(ts) {
+    if (!ts) { return 'never'; }
     var d = new Date(ts);
     var diff = (new Date()).getTime() - ts;
+    if (diff < 0) { diff = 0; }
     if (diff < 60000) { return 'just now'; }
     if (diff < 3600000) { return Math.floor(diff / 60000) + 'm ago'; }
     if (diff < 86400000) { return Math.floor(diff / 3600000) + 'h ago'; }
+    if (diff < 604800000) { return Math.floor(diff / 86400000) + 'd ago'; }
     var mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     return mo[d.getMonth()] + ' ' + d.getDate();
+  }
+
+  function newId(prefix) {
+    return (prefix || 'x') + (new Date()).getTime().toString(36) +
+           Math.floor(Math.random() * 1296).toString(36);
   }
 
   /* ---------- UI helpers ---------- */
@@ -113,9 +287,7 @@ var ROAK = (function () {
     el.innerHTML = esc(msg);
     el.className = 'show';
     if (toastTimer) { window.clearTimeout(toastTimer); }
-    toastTimer = window.setTimeout(function () {
-      el.className = '';
-    }, 2200);
+    toastTimer = window.setTimeout(function () { el.className = ''; }, 2600);
   }
 
   function qs(name) {
@@ -134,8 +306,7 @@ var ROAK = (function () {
     var h = (window.location.hash || '').replace(/^#/, '');
     var i = h.indexOf('?');
     if (i >= 0) { h = h.substring(0, i); }
-    if (!h) { h = 'home'; }
-    return h;
+    return h || 'home';
   }
 
   /* ---------- shell ---------- */
@@ -144,31 +315,24 @@ var ROAK = (function () {
     ['home', 'HQ'],
     ['chat', 'Chat'],
     ['neighborhood', 'Neighborhood'],
+    ['pinboard', 'Pinboard'],
     ['topics', 'Topics'],
     ['js', 'JS App']
   ];
 
-  function counts(d) {
-    return {
-      chat: d.chat.length,
-      neighborhood: d.neighborhood.length,
-      topics: d.topics.length
-    };
-  }
-
   function shell(title, body) {
-    var d = db();
-    var c = counts(d);
+    var chat = list(tree.chat);
+    var nb = list(tree.neighborhood);
+    var pins = list(tree.pins);
+    var topics = list(tree.topics);
     var r = route();
+    var counts = { chat: chat.length, neighborhood: nb.length, pinboard: pins.length, topics: topics.length };
+
     var nav = '';
     for (var i = 0; i < NAV.length; i++) {
       var key = NAV[i][0];
-      var label = NAV[i][1];
-      var tag = '';
-      if (key === 'chat' && c.chat) { tag = '<span class="tag">' + c.chat + '</span>'; }
-      if (key === 'neighborhood' && c.neighborhood) { tag = '<span class="tag">' + c.neighborhood + '</span>'; }
-      if (key === 'topics' && c.topics) { tag = '<span class="tag">' + c.topics + '</span>'; }
-      nav += '<a href="#' + key + '"' + (r === key ? ' class="on"' : '') + '>' + label + tag + '</a>';
+      var tag = counts[key] ? '<span class="tag">' + counts[key] + '</span>' : '';
+      nav += '<a href="#' + key + '"' + (r === key ? ' class="on"' : '') + '>' + NAV[i][1] + tag + '</a>';
     }
 
     var who = me();
@@ -183,24 +347,26 @@ var ROAK = (function () {
       '</div>' +
       '<div class="nav">' + nav + '</div>' +
       '<div class="wrap">' +
-
+        '<div id="live" class="live">' + stampLine() + '</div>' +
         '<h1>' + esc(title) + '</h1>' +
         body +
         '<footer>' +
           'ROAKSTASAWD HQ &middot; built for e-ink &middot; ' +
-          'every page is plain HTML, no images, no tracking.<br>' +
-          'Posts are saved on this device only. Clearing browser data clears them.' +
+          (cloudOn()
+            ? 'posts are shared and saved on the server.'
+            : 'no backend set yet &mdash; posts stay on this device.') +
         '</footer>' +
       '</div>' +
-      '<div id="signin" style="display:none">' +
+      '<div id="signin" class="overlay" style="display:none">' +
         '<div class="wrap" style="padding-top:0">' +
           '<div class="box">' +
             '<h2 style="margin-top:0">Pick a name</h2>' +
-            '<p class="small">No password. It is just what shows next to your posts on this device.</p>' +
-            '<form id="signinform" action="#' + r + '">' +
+            '<p class="small">No password. It is the name that shows next to your posts.</p>' +
+            '<form id="signinform" action="#">' +
               '<label for="namefield">Your name</label>' +
               '<input type="text" id="namefield" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off">' +
               '<button class="btn wide" type="submit">Use this name</button>' +
+              '<button class="btn wide" type="button" id="signincancel">Cancel</button>' +
             '</form>' +
           '</div>' +
         '</div>' +
@@ -210,13 +376,11 @@ var ROAK = (function () {
     document.getElementById('root').innerHTML = html;
 
     var sib = document.getElementById('signinbtn');
-    if (sib) {
-      sib.onclick = function (e) { e.preventDefault(); openSignin(); return false; };
-    }
+    if (sib) { sib.onclick = function (e) { e.preventDefault(); openSignin(); return false; }; }
     var sw = document.getElementById('switchname');
-    if (sw) {
-      sw.onclick = function (e) { e.preventDefault(); openSignin(); return false; };
-    }
+    if (sw) { sw.onclick = function (e) { e.preventDefault(); openSignin(); return false; }; }
+    var sc = document.getElementById('signincancel');
+    if (sc) { sc.onclick = function () { closeSignin(); }; }
     var sf = document.getElementById('signinform');
     if (sf) {
       sf.onsubmit = function (e) {
@@ -230,17 +394,15 @@ var ROAK = (function () {
       };
     }
 
-    window.scrollTo(0, 0);
+    if (!window.scrollY) { window.scrollTo(0, 0); }
   }
 
   function openSignin() {
     var el = document.getElementById('signin');
+    if (!el) { return; }
     el.style.display = 'block';
     var f = document.getElementById('namefield');
-    if (f) {
-      f.value = me();
-      try { f.focus(); } catch (e) {}
-    }
+    if (f) { f.value = me(); try { f.focus(); } catch (e) {} }
   }
 
   function closeSignin() {
@@ -248,67 +410,100 @@ var ROAK = (function () {
     if (el) { el.style.display = 'none'; }
   }
 
+  /* ---------- shared bits of page furniture ---------- */
+
+  function statusBox() {
+    if (state === 'loading') {
+      return '<div class="empty">Loading&hellip;</div>';
+    }
+    if (state === 'offline') {
+      return '<div class="box tight"><b>Offline.</b> ' +
+        '<span class="small">Showing the copy saved on this device. ' +
+        'New posts are kept here and go up when you are back on.</span></div>';
+    }
+    return '';
+  }
+
+  function nameBox() {
+    if (me()) { return ''; }
+    return '<div class="box">' +
+      '<b>Pick a name to post.</b><br>' +
+      '<span class="small">It only takes a second.</span><br>' +
+      '<a class="btn" href="#" id="start">Start</a></div>';
+  }
+
   /* ---------- pages ---------- */
 
   function pageHome() {
-    var d = db();
-    var c = counts(d);
-    var who = me();
+    var chat = list(tree.chat);
+    var nb = list(tree.neighborhood);
+    var pins = list(tree.pins);
+    var topics = list(tree.topics);
     var body = '';
 
     body += '<p class="lede">A headquarters for people reading on Amazon Kindles. ' +
             'Plain pages, black and white, big buttons. If you can load it on a Kindle, ' +
             'you are in the right place.</p>';
 
-    if (!who) {
-      body += '<div class="box">' +
-        '<b>First time here?</b><br>' +
-        '<span class="small">Pick a name and the apps below open up. Nothing leaves this device.</span><br>' +
-        '<a class="btn" href="#" id="start">Start</a>' +
-        '</div>';
-    }
+    body += statusBox();
+    body += nameBox();
 
     body += '<h2>Apps</h2>';
     body += '<a class="topic" href="#chat"><span class="t">Chat</span>' +
-            '<span class="m">' + c.chat + ' message' + (c.chat === 1 ? '' : 's') + ' &middot; talk in real time-ish</span></a>';
+            '<span class="m">' + chat.length + ' message' + (chat.length === 1 ? '' : 's') + ' &middot; short and quick</span></a>';
     body += '<a class="topic" href="#neighborhood"><span class="t">Neighborhood</span>' +
-            '<span class="m">' + c.neighborhood + ' post' + (c.neighborhood === 1 ? '' : 's') + ' &middot; longer posts, slower pace</span></a>';
+            '<span class="m">' + nb.length + ' post' + (nb.length === 1 ? '' : 's') + ' &middot; longer posts, slower pace</span></a>';
+    body += '<a class="topic" href="#pinboard"><span class="t">Pinboard</span>' +
+            '<span class="m">' + pins.length + ' pin' + (pins.length === 1 ? '' : 's') + ' &middot; the permanent board</span></a>';
     body += '<a class="topic" href="#topics"><span class="t">Topics</span>' +
-            '<span class="m">' + c.topics + ' thread' + (c.topics === 1 ? '' : 's') + ' &middot; one subject per thread</span></a>';
+            '<span class="m">' + topics.length + ' thread' + (topics.length === 1 ? '' : 's') + ' &middot; one subject per thread</span></a>';
     body += '<a class="topic" href="#js"><span class="t">JS App</span>' +
             '<span class="m">write JavaScript, run it, see it work</span></a>';
+
+    if (pins.length) {
+      body += '<h2>Latest pins</h2>';
+      var recent = pins.slice(pins.length - 3).reverse();
+      for (var i = 0; i < recent.length; i++) {
+        body += '<div class="post"><div class="post-meta"><span class="who">' + esc(recent[i].by) +
+                '</span> &middot; ' + when(recent[i].at) + '</div>' +
+                '<div class="post-body">' + esc(recent[i].text) + '</div></div>';
+      }
+      body += '<a class="btn" href="#pinboard">Open the pinboard</a>';
+    }
 
     body += '<h2>How this place works</h2>' +
       '<div class="box tight"><p class="small" style="margin:0">' +
       '<b>One column, no scrolling sideways.</b> Everything is a single column of blocks so the ' +
       'Kindle does not have to guess where you are.<br><br>' +
       '<b>No images.</b> A Kindle repaints the whole screen for a picture. Text is faster.<br><br>' +
-      '<b>Tap targets are big.</b> Buttons are at least 44px tall, because fingers are bigger than cursors.<br><br>' +
-      '<b>Nothing moves.</b> No animations, no spinners, no video. The screen only changes when you tap.' +
+      '<b>Tap targets are big.</b> Buttons are at least 44px tall.<br><br>' +
+      '<b>Nothing moves.</b> No animations, no spinners, no video. The screen only changes when you tap.<br><br>' +
+      '<b>Saved for everyone.</b> Chat, posts, pins and topics are kept on the server, so a post made ' +
+      'on one Kindle shows up on the others.' +
       '</p></div>';
 
-    body += '<div class="box fill">' +
-      '<b>Try it on the Kindle</b><br>' +
-      '<span class="small">Open the address of this site in the Kindle Experimental Browser, ' +
-      'then add it to your reading list so you can get back to it.</span>' +
-      '</div>';
-
     shell('HQ', body);
+    wireStart();
+  }
 
+  function wireStart() {
     var st = document.getElementById('start');
-    if (st) {
-      st.onclick = function (e) { e.preventDefault(); openSignin(); return false; };
-    }
+    if (st) { st.onclick = function (e) { e.preventDefault(); openSignin(); return false; }; }
   }
 
   /* ----- chat ----- */
 
   function pageChat() {
-    var d = db();
+    var all = list(tree.chat);
+    var shown = CHAT_SHOWN;
+    try {
+      var v = parseInt(window.localStorage.getItem(VIEW_KEY), 10);
+      if (v && v > shown) { shown = v; }
+    } catch (e) {}
+    var msgs = all.slice(Math.max(0, all.length - shown));
     var body = '';
     var log = '';
     var i;
-    var msgs = d.chat.slice(-60);
 
     if (!msgs.length) {
       log = '<div class="empty"><b>No messages yet.</b><br><span class="small">Say hello.</span></div>';
@@ -323,15 +518,21 @@ var ROAK = (function () {
       }
     }
 
-    body += '<p class="small dim">Messages stay on this device. Newest at the bottom.</p>';
+    body += statusBox();
+    body += nameBox();
+    body += '<p class="small dim">' + all.length + ' message' + (all.length === 1 ? '' : 's') +
+            ' saved. Showing the last ' + msgs.length + '. The server keeps the latest ' + KEEP_CHAT + '.</p>';
     body += '<div class="chatlog" id="chatlog">' + log + '</div>';
+    if (all.length > msgs.length) {
+      body += '<a class="btn small" href="#" id="chatmore">Load ' +
+              Math.min(CHAT_SHOWN, all.length - msgs.length) + ' older</a>';
+    }
     body += '<div class="chatform">' +
       '<form id="chatform" action="#chat">' +
         '<label for="chattext">Message</label>' +
         '<textarea id="chattext" maxlength="500"></textarea>' +
         '<button class="btn wide" type="submit">Send</button>' +
       '</form>' +
-      '<a class="btn small" href="#" id="chatclear">Clear chat</a>' +
     '</div>';
 
     shell('Chat', body);
@@ -339,25 +540,28 @@ var ROAK = (function () {
     var lg = document.getElementById('chatlog');
     if (lg) { lg.scrollTop = lg.scrollHeight; }
 
+    var more = document.getElementById('chatmore');
+    if (more) {
+      more.onclick = function (e) {
+        e.preventDefault();
+        try { window.localStorage.setItem(VIEW_KEY, String(shown + CHAT_SHOWN)); } catch (err) {}
+        render();
+        return false;
+      };
+    }
+
     document.getElementById('chatform').onsubmit = function (e) {
       e.preventDefault();
       if (!needName()) { return false; }
       var t = trim(document.getElementById('chattext').value);
       if (!t) { toast('Type a message'); return false; }
-      var dd = db();
-      dd.chat.push({ by: me(), text: t, at: (new Date()).getTime() });
-      commit(dd);
-      render();
-      return false;
-    };
-
-    document.getElementById('chatclear').onclick = function (e) {
-      e.preventDefault();
-      var dd = db();
-      dd.chat = [];
-      commit(dd);
-      toast('Chat cleared');
-      render();
+      document.getElementById('chattext').value = '';
+      change(function (d) {
+        d.chat.push({ id: newId('c'), by: me(), text: t, at: (new Date()).getTime() });
+      }, function (ok) {
+        render();
+        toast(ok ? 'Sent' : 'Saved on this device — will sync');
+      });
       return false;
     };
   }
@@ -365,23 +569,23 @@ var ROAK = (function () {
   /* ----- neighborhood ----- */
 
   function pageNeighborhood() {
-    var d = db();
+    var posts = list(tree.neighborhood).reverse();
+    var likes = list(tree.likes);
     var body = '';
-    var list = '';
+    var listHtml = '';
     var i;
 
-    var posts = d.neighborhood.slice().reverse();
     if (!posts.length) {
-      list = '<div class="empty"><b>The neighborhood is quiet.</b><br>' +
+      listHtml = '<div class="empty"><b>The neighborhood is quiet.</b><br>' +
              '<span class="small">Put the first post up.</span></div>';
     } else {
       for (i = 0; i < posts.length; i++) {
         var p = posts[i];
         var liked = false;
-        for (var k = 0; k < d.likes.length; k++) {
-          if (d.likes[k] === p.id) { liked = true; }
+        for (var k = 0; k < likes.length; k++) {
+          if (likes[k].id === p.id) { liked = true; }
         }
-        list += '<div class="post">' +
+        listHtml += '<div class="post">' +
           '<div class="post-meta"><span class="who">' + esc(p.by) + '</span> &middot; ' + when(p.at) +
             (p.tag ? ' &middot; #' + esc(p.tag) : '') + '</div>' +
           '<div class="post-body">' + esc(p.text) + '</div>' +
@@ -393,15 +597,17 @@ var ROAK = (function () {
       }
     }
 
-    body += '<p class="small dim">Post something, or read what the street is saying.</p>';
+    body += statusBox();
+    body += nameBox();
+    body += '<p class="small dim">Post something, or read what the street is saying. Every post is kept.</p>';
     body += '<form id="postform" action="#neighborhood">' +
       '<label for="posttext">Your post</label>' +
-      '<textarea id="posttext" maxlength="1000"></textarea>' +
+      '<textarea id="posttext" maxlength="2000"></textarea>' +
       '<label for="posttag">Tag (optional, one word)</label>' +
       '<input type="text" id="posttag" maxlength="16" autocomplete="off" autocorrect="off" autocapitalize="off">' +
       '<button class="btn wide" type="submit">Post to the neighborhood</button>' +
     '</form>';
-    body += '<h2>Posts</h2>' + list;
+    body += '<h2>Posts</h2>' + listHtml;
 
     shell('Neighborhood', body);
 
@@ -411,83 +617,170 @@ var ROAK = (function () {
       var t = trim(document.getElementById('posttext').value);
       if (!t) { toast('Write something first'); return false; }
       var tag = trim(document.getElementById('posttag').value).replace(/[^A-Za-z0-9]/g, '');
-      var dd = db();
-      dd.neighborhood.push({
-        id: nextId(dd),
-        by: me(),
-        text: t,
-        tag: tag,
-        at: (new Date()).getTime()
+      change(function (d) {
+        d.neighborhood.push({ id: newId('n'), by: me(), text: t, tag: tag, at: (new Date()).getTime() });
+      }, function (ok) {
+        render();
+        toast(ok ? 'Posted' : 'Saved on this device — will sync');
       });
-      commit(dd);
-      toast('Posted');
-      render();
       return false;
     };
 
+    wireListActions('data-like', function (id) {
+      change(function (d) {
+        var ls = list(d.likes);
+        var keep = [];
+        var had = false;
+        for (var z = 0; z < ls.length; z++) {
+          if (ls[z].id === id) { had = true; }
+          else { keep.push(ls[z]); }
+        }
+        if (!had) { keep.push({ id: id, by: me(), at: (new Date()).getTime() }); }
+        d.likes = keep;
+      }, function () { render(); });
+    });
+
+    wireListActions('data-del', function (id) {
+      change(function (d) {
+        var src = list(d.neighborhood);
+        var keep = [];
+        for (var z = 0; z < src.length; z++) {
+          if (src[z].id !== id) { keep.push(src[z]); }
+        }
+        d.neighborhood = keep;
+      }, function () { render(); toast('Deleted'); });
+    });
+  }
+
+  function wireListActions(attr, fn) {
     var links = document.getElementById('root').getElementsByTagName('a');
     for (var j = 0; j < links.length; j++) {
       var a = links[j];
-      if (a.getAttribute('data-like')) {
-        a.onclick = (function (id) {
-          return function (e) {
-            e.preventDefault();
-            var dd = db();
-            var idx = -1;
-            for (var z = 0; z < dd.likes.length; z++) {
-              if (dd.likes[z] === id) { idx = z; }
-            }
-            if (idx >= 0) { dd.likes.splice(idx, 1); }
-            else { dd.likes.push(id); }
-            commit(dd);
-            render();
-            return false;
-          };
-        })(a.getAttribute('data-like'));
-      }
-      if (a.getAttribute('data-del')) {
-        a.onclick = (function (id) {
-          return function (e) {
-            e.preventDefault();
-            var dd = db();
-            var keep = [];
-            for (var z = 0; z < dd.neighborhood.length; z++) {
-              if (dd.neighborhood[z].id !== id) { keep.push(dd.neighborhood[z]); }
-            }
-            dd.neighborhood = keep;
-            commit(dd);
-            toast('Deleted');
-            render();
-            return false;
-          };
-        })(a.getAttribute('data-del'));
+      var id = a.getAttribute(attr);
+      if (id) {
+        a.onclick = (function (pid) {
+          return function (e) { e.preventDefault(); fn(pid); return false; };
+        })(id);
       }
     }
+  }
+
+  /* ----- pinboard ----- */
+
+  function pagePinboard() {
+    var pins = list(tree.pins).reverse();
+    var body = '';
+    var listHtml = '';
+    var i;
+
+    if (!pins.length) {
+      listHtml = '<div class="empty"><b>The board is empty.</b><br>' +
+        '<span class="small">Pin the first note.</span></div>';
+    } else {
+      for (i = 0; i < pins.length; i++) {
+        var p = pins[i];
+        listHtml += '<div class="post pin">' +
+          '<div class="post-meta"><span class="who">' + esc(p.by) + '</span> &middot; ' + when(p.at) +
+            (p.by === me() ? '' : '') + '</div>' +
+          '<div class="post-body">' + esc(p.text) + '</div>' +
+          '<div class="post-actions">' +
+            (p.by === me()
+              ? '<a href="#" data-unpin="' + esc(p.id) + '">Unpin</a>' +
+                '<a href="#" data-edit="' + esc(p.id) + '">Edit</a>'
+              : '') +
+          '</div>' +
+        '</div>';
+      }
+    }
+
+    body += statusBox();
+    body += nameBox();
+    body += '<div class="box tight"><p class="small" style="margin:0">' +
+      '<b>The permanent board.</b> Pins are never trimmed or cleared by the site. ' +
+      'Only you can edit or unpin your own pins. Keep it to things worth keeping: ' +
+      'links, rules, a phone number, a book you finished, a meeting time.</p></div>';
+
+    var editId = qs('edit');
+    var editing = null;
+    if (editId) {
+      for (i = 0; i < pins.length; i++) { if (pins[i].id === editId) { editing = pins[i]; } }
+    }
+
+    body += '<form id="pinform" action="#pinboard">' +
+      '<label for="pintext">' + (editing ? 'Edit this pin' : 'New pin') + '</label>' +
+      '<textarea id="pintext" maxlength="2000">' + (editing ? esc(editing.text) : '') + '</textarea>' +
+      '<button class="btn wide" type="submit">' + (editing ? 'Save pin' : 'Pin it') + '</button>' +
+      (editing ? '<a class="btn wide" href="#pinboard">Cancel</a>' : '') +
+    '</form>';
+    body += '<h2>Pinned</h2>' + listHtml;
+
+    shell(editing ? 'Editing pin' : 'Pinboard', body);
+
+    document.getElementById('pinform').onsubmit = function (e) {
+      e.preventDefault();
+      if (!needName()) { return false; }
+      var t = trim(document.getElementById('pintext').value);
+      if (!t) { toast('Write the pin first'); return false; }
+      var now = (new Date()).getTime();
+      change(function (d) {
+        if (editing) {
+          var ps = list(d.pins);
+          for (var z = 0; z < ps.length; z++) {
+            if (ps[z].id === editing.id) { ps[z].text = t; ps[z].edited = now; }
+          }
+          d.pins = ps;
+        } else {
+          d.pins.push({ id: newId('b'), by: me(), text: t, at: now });
+        }
+      }, function (ok) {
+        if (editing) { window.location.hash = 'pinboard'; }
+        render();
+        toast(ok ? (editing ? 'Pin saved' : 'Pinned') : 'Saved on this device — will sync');
+      });
+      return false;
+    };
+
+    wireListActions('data-unpin', function (id) {
+      change(function (d) {
+        var ps = list(d.pins);
+        var keep = [];
+        for (var z = 0; z < ps.length; z++) { if (ps[z].id !== id) { keep.push(ps[z]); } }
+        d.pins = keep;
+      }, function () { render(); toast('Unpinned'); });
+    });
+
+    wireListActions('data-edit', function (id) {
+      window.location.hash = 'pinboard?edit=' + encodeURIComponent(id);
+      render();
+    });
   }
 
   /* ----- topics ----- */
 
   function pageTopics() {
-    var d = db();
     var id = qs('id');
     var body = '';
     var i;
 
     if (id) {
       var t = null;
-      for (i = 0; i < d.topics.length; i++) {
-        if (d.topics[i].id === id) { t = d.topics[i]; }
+      var all = list(tree.topics);
+      for (i = 0; i < all.length; i++) {
+        if (all[i].id === id) { t = all[i]; }
       }
       if (!t) {
-        shell('Topics', '<div class="empty"><b>No such topic.</b><br><a class="btn" href="#topics">Back to topics</a></div>');
+        shell('Topics', statusBox() + '<div class="empty"><b>No such topic.</b><br>' +
+              '<a class="btn" href="#topics">Back to topics</a></div>');
         return;
       }
+      var replies = list(t.replies);
+      body += statusBox();
       body += '<p class="small"><a href="#topics">&larr; All topics</a></p>';
       body += '<div class="box tight"><b>' + esc(t.title) + '</b><br>' +
-              '<span class="small dim">started by ' + esc(t.by) + ' &middot; ' + when(t.at) + '</span></div>';
-      var replies = t.replies || [];
+              '<span class="small dim">started by ' + esc(t.by) + ' &middot; ' + when(t.at) +
+              ' &middot; ' + replies.length + ' repl' + (replies.length === 1 ? 'y' : 'ies') + '</span></div>';
       if (!replies.length) {
-        body += '<div class="empty"><b>No replies yet.</b><br><span class="small">Be the first.</span></div>';
+        body += '<div class="empty"><b>No replies yet.</b></div>';
       }
       for (i = 0; i < replies.length; i++) {
         body += '<div class="post">' +
@@ -497,7 +790,7 @@ var ROAK = (function () {
       }
       body += '<form id="replyform" action="#topics?id=' + encodeURIComponent(id) + '">' +
         '<label for="replytext">Reply</label>' +
-        '<textarea id="replytext" maxlength="1000"></textarea>' +
+        '<textarea id="replytext" maxlength="2000"></textarea>' +
         '<button class="btn wide" type="submit">Post reply</button>' +
       '</form>';
       shell(t.title, body);
@@ -507,37 +800,44 @@ var ROAK = (function () {
         if (!needName()) { return false; }
         var txt = trim(document.getElementById('replytext').value);
         if (!txt) { toast('Write a reply first'); return false; }
-        var dd = db();
-        for (var z = 0; z < dd.topics.length; z++) {
-          if (dd.topics[z].id === id) {
-            if (!dd.topics[z].replies) { dd.topics[z].replies = []; }
-            dd.topics[z].replies.push({ by: me(), text: txt, at: (new Date()).getTime() });
+        change(function (d) {
+          var ts = list(d.topics);
+          for (var z = 0; z < ts.length; z++) {
+            if (ts[z].id === id) {
+              var rs = list(ts[z].replies);
+              rs.push({ id: newId('r'), by: me(), text: txt, at: (new Date()).getTime() });
+              ts[z].replies = rs;
+            }
           }
-        }
-        commit(dd);
-        render();
+          d.topics = ts;
+        }, function (ok) {
+          render();
+          toast(ok ? 'Reply posted' : 'Saved on this device — will sync');
+        });
         return false;
       };
       return;
     }
 
-    body += '<p class="small dim">One subject per thread. Start one, or answer an existing one.</p>';
+    body += statusBox();
+    body += nameBox();
+    body += '<p class="small dim">One subject per thread. Every topic and reply is kept.</p>';
     body += '<form id="topicform" action="#topics">' +
       '<label for="topictitle">Topic title</label>' +
       '<input type="text" id="topictitle" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="off">' +
       '<label for="topictext">First post</label>' +
-      '<textarea id="topictext" maxlength="1000"></textarea>' +
+      '<textarea id="topictext" maxlength="2000"></textarea>' +
       '<button class="btn wide" type="submit">Start topic</button>' +
     '</form>';
 
     body += '<h2>All topics</h2>';
-    var topics = d.topics.slice().reverse();
+    var topics = list(tree.topics).reverse();
     if (!topics.length) {
       body += '<div class="empty"><b>No topics yet.</b><br><span class="small">Start the first one above.</span></div>';
     }
     for (i = 0; i < topics.length; i++) {
       var tt = topics[i];
-      var n = (tt.replies || []).length;
+      var n = list(tt.replies).length;
       body += '<a class="topic" href="#topics?id=' + encodeURIComponent(tt.id) + '">' +
         '<span class="t">' + esc(tt.title) + '</span>' +
         '<span class="m">' + esc(tt.by) + ' &middot; ' + n + ' repl' + (n === 1 ? 'y' : 'ies') +
@@ -553,18 +853,22 @@ var ROAK = (function () {
       var txt = trim(document.getElementById('topictext').value);
       if (!title) { toast('Give the topic a title'); return false; }
       if (!txt) { toast('Write the first post'); return false; }
-      var dd = db();
-      var nid = nextId(dd);
-      dd.topics.push({
-        id: nid,
-        title: title,
-        by: me(),
-        at: (new Date()).getTime(),
-        replies: [{ by: me(), text: txt, at: (new Date()).getTime() }]
+      var nid = newId('t');
+      var now = (new Date()).getTime();
+      change(function (d) {
+        var ts = list(d.topics);
+        ts.push({
+          id: nid,
+          title: title,
+          by: me(),
+          at: now,
+          replies: [{ id: newId('r'), by: me(), text: txt, at: now }]
+        });
+        d.topics = ts;
+      }, function () {
+        window.location.hash = 'topics?id=' + encodeURIComponent(nid);
+        render();
       });
-      commit(dd);
-      window.location.hash = 'topics?id=' + encodeURIComponent(nid);
-      render();
       return false;
     };
   }
@@ -611,6 +915,17 @@ var ROAK = (function () {
       doc.close();
     } catch (e) {}
 
+    function joinArgs(args) {
+      var parts = [];
+      for (var k = 0; k < args.length; k++) {
+        var v = args[k];
+        if (typeof v === 'object') {
+          try { parts.push(JSON.stringify(v)); } catch (e) { parts.push(String(v)); }
+        } else { parts.push(String(v)); }
+      }
+      return parts.join(' ');
+    }
+
     function run() {
       var code = document.getElementById('code').value;
       var out = document.getElementById('out');
@@ -646,19 +961,6 @@ var ROAK = (function () {
       out.innerHTML = esc(text);
     }
 
-    function joinArgs(args) {
-      var parts = [];
-      for (var k = 0; k < args.length; k++) {
-        var v = args[k];
-        if (typeof v === 'object') {
-          try { parts.push(JSON.stringify(v)); } catch (e) { parts.push(String(v)); }
-        } else {
-          parts.push(String(v));
-        }
-      }
-      return parts.join(' ');
-    }
-
     document.getElementById('run').onclick = run;
     document.getElementById('clearcode').onclick = function () {
       document.getElementById('code').value = '';
@@ -679,14 +981,28 @@ var ROAK = (function () {
 
   /* ---------- boot ---------- */
 
+  var lastRoute = '';
+
   function render() {
     var r = route();
     closeSignin();
     if (r === 'chat') { pageChat(); }
     else if (r === 'neighborhood') { pageNeighborhood(); }
+    else if (r === 'pinboard') { pagePinboard(); }
     else if (r === 'topics') { pageTopics(); }
     else if (r === 'js') { pageJs(); }
     else { pageHome(); }
+    lastRoute = r;
+  }
+
+  /* redraw without jumping to the top (used by the live refresh) */
+  function renderSoft() {
+    var y = 0;
+    try { y = window.pageYOffset || document.documentElement.scrollTop || 0; } catch (e) {}
+    var r = route();
+    if (r === 'js') { return; }
+    render();
+    try { window.scrollTo(0, y); } catch (e) {}
   }
 
   function boot() {
@@ -695,18 +1011,24 @@ var ROAK = (function () {
     } else {
       window.addEventListener('hashchange', render, false);
     }
-    render();
+    pull(function () {
+      render();
+      startPolling();
+    });
   }
 
   return {
     boot: boot,
     render: render,
-    db: db,
-    commit: commit,
+    pull: pull,
+    change: change,
+    tree: function () { return tree; },
+    list: list,
     me: me,
     setMe: setMe,
     esc: esc,
-    toast: toast
+    toast: toast,
+    cloudOn: cloudOn
   };
 })();
 
