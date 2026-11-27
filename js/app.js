@@ -2,20 +2,24 @@
    Written for old browsers: ES5 only, no fetch, no arrow functions,
    no template literals, no let/const. Works on Kindle's experimental browser.
 
-   Data lives in one JSON tree shared by everyone. Two backends can hold it:
-     - "local":  this device's localStorage (offline copy, always kept)
-     - "cloud":  any HTTP backend with GET/PUT of a JSON document.
-                 Firebase Realtime Database is the one set up in js/backend.js.
-   Every write reads the latest copy, changes its own piece, and puts it back,
-   so nobody's post is overwritten by a stale page. */
+   Data lives in one JSON tree shared by everyone, held in any HTTP backend that
+   can GET and PUT a JSON document. Firebase Realtime Database is the one set up
+   in js/backend.js. Every write reads the latest copy, changes its own piece and
+   puts it back, so nobody's post is lost to a stale page.
+
+   The same document is read constantly (every second on the chat page), so this
+   doubles as the "real time" layer: a post on one Kindle shows up on the others
+   within a second or two, and straight after your own writes. */
 
 var ROAK = (function () {
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
-  var ME_KEY = 'roak.me';          /* this device's display name */
+  var ME_KEY = 'roak.me';          /* { name, key } of the signed-in account */
   var VIEW_KEY = 'roak.view';      /* how many chat messages to show */
   var CHAT_SHOWN = 100;            /* chat messages rendered at once */
   var KEEP_CHAT = 300;             /* chat messages kept in the database */
+  var FAST_MS = 1000;              /* refresh rate on the chat page */
+  var SLOW_MS = 5000;              /* refresh rate everywhere else */
 
   /* ---------- backend selection ---------- */
 
@@ -42,6 +46,7 @@ var ROAK = (function () {
   function blank() {
     return {
       meta: { updated: 0, by: '' },
+      accounts: [],
       chat: [],
       neighborhood: [],
       topics: [],
@@ -54,6 +59,7 @@ var ROAK = (function () {
     if (!d || typeof d !== 'object') { d = {}; }
     var b = blank();
     if (!d.meta || typeof d.meta !== 'object') { d.meta = b.meta; }
+    if (!d.accounts) { d.accounts = b.accounts; }
     if (!d.chat || !d.chat.length && typeof d.chat !== 'object') { d.chat = b.chat; }
     if (!d.neighborhood) { d.neighborhood = b.neighborhood; }
     if (!d.topics) { d.topics = b.topics; }
@@ -80,8 +86,9 @@ var ROAK = (function () {
   var tree = blank();
   var state = 'start';   /* start | loading | ready | offline | empty */
   var lastError = '';
-  var pending = null;    /* what the user was trying to send */
   var poller = null;
+  var polling = false;
+  var tick = 0;
 
   function localGet() {
     var raw = null;
@@ -94,19 +101,10 @@ var ROAK = (function () {
     try { window.localStorage.setItem(LS_KEY, JSON.stringify(d)); } catch (e) {}
   }
 
-  function mergeLists(remote, local) {
-    var seen = {};
-    var out = [];
-    var i;
-    for (i = 0; i < remote.length; i++) {
-      if (remote[i] && remote[i].id) { seen[remote[i].id] = 1; }
-      out.push(remote[i]);
-    }
-    for (i = 0; i < local.length; i++) {
-      if (local[i] && local[i].id && !seen[local[i].id]) { out.push(local[i]); }
-    }
-    out.sort(function (a, b) { return (a.at || 0) - (b.at || 0); });
-    return out;
+  /* A stable fingerprint of everything a page shows, so a redraw only happens
+     when something actually changed. */
+  function sig(d) {
+    try { return JSON.stringify(d); } catch (e) { return String((new Date()).getTime()); }
   }
 
   /* Pull the shared copy into memory. Falls back to the local copy. */
@@ -116,41 +114,44 @@ var ROAK = (function () {
 
     if (!cloudOn()) {
       state = cached ? 'ready' : 'empty';
-      if (cb) { cb(); }
+      if (cb) { cb(false); }
       return;
     }
 
-    state = 'loading';
+    if (state !== 'ready') { state = 'loading'; }
     var req = new XMLHttpRequest();
     var url = rootUrl() + 'hq.json?ts=' + (new Date()).getTime();
     req.open('GET', url, true);
     req.onreadystatechange = function () {
       if (req.readyState !== 4) { return; }
+      var changed = false;
       if (req.status >= 200 && req.status < 300) {
         var d = null;
         try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
         if (d) {
+          var before = sig(tree);
           tree = normalize(d);
           localPut(tree);
+          changed = sig(tree) !== before;
           state = 'ready';
         } else {
           state = cached ? 'ready' : 'empty';
         }
       } else if (req.status === 0) {
-        state = cached ? 'offline' : 'offline';
+        state = 'offline';
         lastError = 'No connection';
       } else {
-        state = cached ? 'offline' : 'offline';
+        state = 'offline';
         lastError = 'Server said ' + req.status;
       }
-      if (cb) { cb(); }
+      if (cb) { cb(changed); }
     };
     try {
       req.send(null);
     } catch (e) {
-      state = cached ? 'offline' : 'offline';
+      state = 'offline';
       lastError = 'No connection';
-      if (cb) { cb(); }
+      if (cb) { cb(false); }
     }
   }
 
@@ -197,21 +198,48 @@ var ROAK = (function () {
     });
   }
 
+  /* ---------- live refresh ---------- */
+
+  function fastRoute() {
+    var r = route();
+    return r === 'chat' || r === 'home';
+  }
+
+  function refresh() {
+    if (polling || !cloudOn()) { return; }
+    polling = true;
+    pull(function (changed) {
+      polling = false;
+      tick++;
+      var box = document.getElementById('live');
+      if (box) {
+        var h = stampLine();
+        if (box.innerHTML !== h) { box.innerHTML = h; }
+      }
+      if (!changed) { return; }
+      var r = route();
+      if (r === 'js') { return; }
+      if (r === 'chat') { softChat(); }
+      else { renderSoft(); }
+    });
+  }
+
   function startPolling() {
     if (poller || !cloudOn()) { return; }
     poller = window.setInterval(function () {
-      var r = route();
-      if (r !== 'chat' && r !== 'neighborhood' && r !== 'topics' && r !== 'pinboard' && r !== 'home') { return; }
-      pull(function () {
-        var box = document.getElementById('live');
-        if (!box) { return; }
-        var h = stampLine();
-        if (box.innerHTML !== h) {
-          box.innerHTML = h;
-          renderSoft();
-        }
-      });
-    }, 20000);
+      refresh();
+    }, FAST_MS);
+    try {
+      window.addEventListener('focus', refresh, false);
+    } catch (e) {}
+  }
+
+  /* a message's "3m ago" needs to keep up even when nothing arrives */
+  function stampAge(ts) {
+    var diff = (new Date()).getTime() - (ts || 0);
+    if (diff < 45000) { return 'now'; }
+    if (diff < 3600000) { return Math.floor(diff / 60000) + 'm'; }
+    return Math.floor(diff / 3600000) + 'h';
   }
 
   function stampLine() {
@@ -219,31 +247,157 @@ var ROAK = (function () {
     return '<span class="dot"></span>' +
       (state === 'offline'
         ? 'Offline — showing the copy on this device'
-        : 'Live · updated ' + when(t) + (tree.meta && tree.meta.by ? ' by ' + esc(tree.meta.by) : ''));
+        : 'Live · ' + (t ? 'last post ' + when(t) + (tree.meta.by ? ' by ' + esc(tree.meta.by) : '') : 'no posts yet') +
+          ' · checked ' + (tick ? 'just now' : '…'));
   }
 
-  /* ---------- me ---------- */
+  /* ---------- accounts ---------- */
 
   function me() {
-    var n = null;
-    try { n = window.localStorage.getItem(ME_KEY); } catch (e) {}
-    return n || '';
+    var raw = null;
+    try { raw = window.localStorage.getItem(ME_KEY); } catch (e) {}
+    if (!raw) { return ''; }
+    var o = null;
+    try { o = JSON.parse(raw); } catch (e) { o = null; }
+    if (o && o.name) { return o.name; }
+    return '';                       /* old plain-name sign-ins are not accounts */
   }
 
-  function setMe(name) {
-    name = String(name || '').replace(/^\s+|\s+$/g, '');
+  function myKey() {
+    var raw = null;
+    try { raw = window.localStorage.getItem(ME_KEY); } catch (e) {}
+    if (!raw) { return ''; }
+    var o = null;
+    try { o = JSON.parse(raw); } catch (e) { o = null; }
+    return o && o.key ? o.key : '';
+  }
+
+  function setMe(name, key) {
     try {
-      if (name) { window.localStorage.setItem(ME_KEY, name); }
-      else { window.localStorage.removeItem(ME_KEY); }
+      if (name) {
+        window.localStorage.setItem(ME_KEY, JSON.stringify({ name: name, key: key || '' }));
+      } else {
+        window.localStorage.removeItem(ME_KEY);
+      }
     } catch (e) {}
     return name;
   }
 
+  function cleanName(n) {
+    return String(n || '').replace(/^\s+|\s+$/g, '').replace(/\s+/g, ' ');
+  }
+
+  /* Names are compared without case or spacing, so "Big Joe", "bigjoe" and
+     "BIG JOE" are the same account. */
+  function nameKey(n) {
+    return cleanName(n).toLowerCase().replace(/[^a-z0-9]/g, '');
+  }
+
+  function findAccount(name) {
+    var k = nameKey(name);
+    if (!k) { return null; }
+    var accs = list(tree.accounts);
+    for (var i = 0; i < accs.length; i++) {
+      if (nameKey(accs[i].name) === k) { return accs[i]; }
+    }
+    return null;
+  }
+
+  function randomKey() {
+    var s = '';
+    var chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+    for (var i = 0; i < 24; i++) {
+      s += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return s;
+  }
+
+  function signedIn() {
+    return me() !== '';
+  }
+
   function needName() {
-    if (me()) { return true; }
-    openSignin();
-    toast('Pick a name first');
+    if (signedIn()) { return true; }
+    openSignin('in');
+    toast('Sign in first');
     return false;
+  }
+
+  /* Every account has a private key; your own key is what lets the site edit
+     or delete your posts. It never leaves this device except to be written
+     back in the database with the rest of the tree. */
+  function signUp(name, key, done) {
+    name = cleanName(name);
+    if (!name) { done('Type a name.'); return; }
+    if (name.length > 20) { done('Keep it to 20 letters.'); return; }
+    if (nameKey(name).length < 2) { done('Use at least 2 letters or numbers.'); return; }
+
+    change(function (d) {
+      var accs = list(d.accounts);
+      for (var i = 0; i < accs.length; i++) {
+        if (nameKey(accs[i].name) === nameKey(name)) {
+          throw { taken: true };
+        }
+      }
+      accs.push({ id: newId('a'), name: name, key: key, at: (new Date()).getTime() });
+      d.accounts = accs;
+    }, function (ok) {
+      if (!ok) { done('Could not reach the server. Try again.'); return; }
+      setMe(name, key);
+      done(null);
+    });
+  }
+
+  /* write with a name check that runs inside the same read-modify-write */
+  function signUpSafe(name, key, done) {
+    pull(function () {
+      if (findAccount(name)) { done('That name is taken. Pick another.'); return; }
+      var taken = false;
+      var d = tree;
+      var accs = list(d.accounts);
+      for (var i = 0; i < accs.length; i++) {
+        if (nameKey(accs[i].name) === nameKey(name)) { taken = true; }
+      }
+      if (taken) { done('That name is taken. Pick another.'); return; }
+      accs.push({ id: newId('a'), name: name, key: key, at: (new Date()).getTime() });
+      d.accounts = accs;
+      d.meta = { updated: (new Date()).getTime(), by: name };
+      tree = d;
+      localPut(tree);
+      if (!cloudOn()) { setMe(name, key); done(null); return; }
+
+      var req = new XMLHttpRequest();
+      req.open('PUT', rootUrl() + 'hq.json', true);
+      try { req.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
+      req.onreadystatechange = function () {
+        if (req.readyState !== 4) { return; }
+        if (req.status >= 200 && req.status < 300) {
+          state = 'ready';
+          setMe(name, key);
+          done(null);
+        } else {
+          state = 'offline';
+          done('Could not reach the server. Try again.');
+        }
+      };
+      try {
+        req.send(JSON.stringify(tree));
+      } catch (e) {
+        state = 'offline';
+        done('Could not reach the server. Try again.');
+      }
+    });
+  }
+
+  function signIn(name, key, done) {
+    pull(function () {
+      var acc = findAccount(name);
+      if (!acc) { done('No account called "' + cleanName(name) + '". Make one below.'); return; }
+      if (!key) { done('This device is signed out. Sign in again or make a new account.'); return; }
+      if (acc.key !== key) { done('That key does not match. Check it and try again.'); return; }
+      setMe(acc.name, acc.key);
+      done(null);
+    });
   }
 
   /* ---------- text ---------- */
@@ -287,7 +441,7 @@ var ROAK = (function () {
     el.innerHTML = esc(msg);
     el.className = 'show';
     if (toastTimer) { window.clearTimeout(toastTimer); }
-    toastTimer = window.setTimeout(function () { el.className = ''; }, 2600);
+    toastTimer = window.setTimeout(function () { el.className = ''; }, 3000);
   }
 
   function qs(name) {
@@ -338,7 +492,7 @@ var ROAK = (function () {
     var who = me();
     var whoBar = who
       ? '<span class="small" style="float:right;padding-top:6px">' + esc(who) +
-        ' &middot; <a href="#" id="switchname"><u>switch</u></a></span>'
+        ' &middot; <a href="#" id="switchname"><u>sign out</u></a></span>'
       : '<a class="btn small" style="float:right" href="#" id="signinbtn">Sign in</a>';
 
     var html =
@@ -353,43 +507,25 @@ var ROAK = (function () {
         '<footer>' +
           'ROAKSTASAWD HQ &middot; built for e-ink &middot; ' +
           (cloudOn()
-            ? 'posts are shared and saved on the server.'
+            ? 'accounts and posts are saved on the server.'
             : 'no backend set yet &mdash; posts stay on this device.') +
         '</footer>' +
       '</div>' +
-      '<div id="signin" class="overlay" style="display:none">' +
-        '<div class="wrap" style="padding-top:0">' +
-          '<div class="box">' +
-            '<h2 style="margin-top:0">Pick a name</h2>' +
-            '<p class="small">No password. It is the name that shows next to your posts.</p>' +
-            '<form id="signinform" action="#">' +
-              '<label for="namefield">Your name</label>' +
-              '<input type="text" id="namefield" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off">' +
-              '<button class="btn wide" type="submit">Use this name</button>' +
-              '<button class="btn wide" type="button" id="signincancel">Cancel</button>' +
-            '</form>' +
-          '</div>' +
-        '</div>' +
-      '</div>' +
+      '<div id="signin" class="overlay" style="display:none"><div class="wrap" style="padding-top:0" id="signinbody"></div></div>' +
       '<div id="toast"></div>';
 
     document.getElementById('root').innerHTML = html;
 
     var sib = document.getElementById('signinbtn');
-    if (sib) { sib.onclick = function (e) { e.preventDefault(); openSignin(); return false; }; }
+    if (sib) { sib.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
     var sw = document.getElementById('switchname');
-    if (sw) { sw.onclick = function (e) { e.preventDefault(); openSignin(); return false; }; }
-    var sc = document.getElementById('signincancel');
-    if (sc) { sc.onclick = function () { closeSignin(); }; }
-    var sf = document.getElementById('signinform');
-    if (sf) {
-      sf.onsubmit = function (e) {
+    if (sw) {
+      sw.onclick = function (e) {
         e.preventDefault();
-        var v = trim(document.getElementById('namefield').value);
-        if (!v) { toast('Type a name'); return false; }
-        setMe(v);
+        setMe('');
         closeSignin();
         render();
+        toast('Signed out on this device');
         return false;
       };
     }
@@ -397,12 +533,13 @@ var ROAK = (function () {
     if (!window.scrollY) { window.scrollTo(0, 0); }
   }
 
-  function openSignin() {
+  /* ----- sign in / make an account ----- */
+
+  function openSignin(mode) {
     var el = document.getElementById('signin');
     if (!el) { return; }
     el.style.display = 'block';
-    var f = document.getElementById('namefield');
-    if (f) { f.value = me(); try { f.focus(); } catch (e) {} }
+    drawSignin(mode || 'in', '');
   }
 
   function closeSignin() {
@@ -410,10 +547,77 @@ var ROAK = (function () {
     if (el) { el.style.display = 'none'; }
   }
 
+  function drawSignin(mode, error) {
+    var box = document.getElementById('signinbody');
+    if (!box) { return; }
+    var signup = mode === 'up';
+    var html = '<div class="box">' +
+      '<h2 style="margin-top:0">' + (signup ? 'Make an account' : 'Sign in') + '</h2>' +
+      (error ? '<div class="box tight" style="border-width:3px"><b>' + esc(error) + '</b></div>' : '') +
+      '<p class="small">' + (signup
+        ? 'An account is a name and a key. Names are unique &mdash; if someone has it, pick another.'
+        : 'Your name and the key this device was given when you made the account.') + '</p>' +
+      '<form id="accform" action="#">' +
+        '<label for="accname">Name</label>' +
+        '<input type="text" id="accname" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" value="' +
+          (signup ? '' : esc(me())) + '">' +
+        (signup
+          ? '<button class="btn wide" type="submit">Create account</button>'
+          : '<label for="acckey">Key</label>' +
+            '<input type="text" id="acckey" maxlength="40" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="from the device you made it on">' +
+            '<button class="btn wide" type="submit">Sign in</button>') +
+        '<button class="btn wide" type="button" id="accswitch">' +
+          (signup ? 'I already have an account' : 'I need an account') + '</button>' +
+        '<button class="btn wide" type="button" id="acccancel">Cancel</button>' +
+      '</form>' +
+    '</div>';
+
+    if (signup) {
+      html += '<div class="box tight"><p class="small" style="margin:0">' +
+        'When the account is made, this device keeps the key and stays signed in. ' +
+        'The same name can never be taken twice.</p></div>';
+    }
+    box.innerHTML = html;
+
+    var f = document.getElementById('accname');
+    if (f) { try { f.focus(); } catch (e) {} }
+
+    document.getElementById('accswitch').onclick = function () {
+      drawSignin(signup ? 'in' : 'up', '');
+    };
+    document.getElementById('acccancel').onclick = function () {
+      closeSignin();
+    };
+    document.getElementById('accform').onsubmit = function (e) {
+      e.preventDefault();
+      var name = cleanName(document.getElementById('accname').value);
+      var keyEl = document.getElementById('acckey');
+      if (signup) {
+        if (!name) { drawSignin('up', 'Type a name.'); return false; }
+        if (nameKey(name).length < 2) { drawSignin('up', 'Use at least 2 letters or numbers.'); return false; }
+        signUpSafe(name, randomKey(), function (err) {
+          if (err) { drawSignin('up', err); return; }
+          closeSignin();
+          render();
+          toast('Welcome, ' + me());
+        });
+      } else {
+        var key = trim(keyEl ? keyEl.value : '');
+        signIn(name, key, function (err) {
+          if (err) { drawSignin('in', err); return; }
+          closeSignin();
+          render();
+          toast('Signed in as ' + me());
+        });
+      }
+      return false;
+    };
+  }
+
   /* ---------- shared bits of page furniture ---------- */
 
   function statusBox() {
-    if (state === 'loading') {
+    if (state === 'loading' && !signedIn()) {
       return '<div class="empty">Loading&hellip;</div>';
     }
     if (state === 'offline') {
@@ -425,11 +629,19 @@ var ROAK = (function () {
   }
 
   function nameBox() {
-    if (me()) { return ''; }
+    if (signedIn()) { return ''; }
     return '<div class="box">' +
-      '<b>Pick a name to post.</b><br>' +
-      '<span class="small">It only takes a second.</span><br>' +
-      '<a class="btn" href="#" id="start">Start</a></div>';
+      '<b>Sign in to post.</b><br>' +
+      '<span class="small">An account is just a name, and no two accounts can share one.</span><br>' +
+      '<a class="btn" href="#" id="start">Sign in</a> ' +
+      '<a class="btn" href="#" id="startup">Make an account</a></div>';
+  }
+
+  function wireStart() {
+    var st = document.getElementById('start');
+    if (st) { st.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
+    var su = document.getElementById('startup');
+    if (su) { su.onclick = function (e) { e.preventDefault(); openSignin('up'); return false; }; }
   }
 
   /* ---------- pages ---------- */
@@ -439,6 +651,7 @@ var ROAK = (function () {
     var nb = list(tree.neighborhood);
     var pins = list(tree.pins);
     var topics = list(tree.topics);
+    var accounts = list(tree.accounts);
     var body = '';
 
     body += '<p class="lede">A headquarters for people reading on Amazon Kindles. ' +
@@ -450,7 +663,7 @@ var ROAK = (function () {
 
     body += '<h2>Apps</h2>';
     body += '<a class="topic" href="#chat"><span class="t">Chat</span>' +
-            '<span class="m">' + chat.length + ' message' + (chat.length === 1 ? '' : 's') + ' &middot; short and quick</span></a>';
+            '<span class="m">' + chat.length + ' message' + (chat.length === 1 ? '' : 's') + ' &middot; live</span></a>';
     body += '<a class="topic" href="#neighborhood"><span class="t">Neighborhood</span>' +
             '<span class="m">' + nb.length + ' post' + (nb.length === 1 ? '' : 's') + ' &middot; longer posts, slower pace</span></a>';
     body += '<a class="topic" href="#pinboard"><span class="t">Pinboard</span>' +
@@ -459,6 +672,14 @@ var ROAK = (function () {
             '<span class="m">' + topics.length + ' thread' + (topics.length === 1 ? '' : 's') + ' &middot; one subject per thread</span></a>';
     body += '<a class="topic" href="#js"><span class="t">JS App</span>' +
             '<span class="m">write JavaScript, run it, see it work</span></a>';
+
+    if (chat.length) {
+      var last = chat[chat.length - 1];
+      body += '<h2>In chat right now</h2>' +
+        '<div class="post"><div class="post-meta"><span class="who">' + esc(last.by) +
+        '</span> &middot; ' + when(last.at) + '</div><div class="post-body">' + esc(last.text) + '</div></div>' +
+        '<a class="btn" href="#chat">Open chat</a>';
+    }
 
     if (pins.length) {
       body += '<h2>Latest pins</h2>';
@@ -471,62 +692,75 @@ var ROAK = (function () {
       body += '<a class="btn" href="#pinboard">Open the pinboard</a>';
     }
 
+    body += '<h2>Members</h2>' +
+      '<div class="box tight"><p class="small" style="margin:0">' +
+      accounts.length + ' account' + (accounts.length === 1 ? '' : 's') + ': ' +
+      (accounts.length ? esc(namesOf(accounts)) : 'none yet &mdash; make the first one.') +
+      '</p></div>';
+
     body += '<h2>How this place works</h2>' +
       '<div class="box tight"><p class="small" style="margin:0">' +
       '<b>One column, no scrolling sideways.</b> Everything is a single column of blocks so the ' +
       'Kindle does not have to guess where you are.<br><br>' +
       '<b>No images.</b> A Kindle repaints the whole screen for a picture. Text is faster.<br><br>' +
       '<b>Tap targets are big.</b> Buttons are at least 44px tall.<br><br>' +
-      '<b>Nothing moves.</b> No animations, no spinners, no video. The screen only changes when you tap.<br><br>' +
-      '<b>Saved for everyone.</b> Chat, posts, pins and topics are kept on the server, so a post made ' +
-      'on one Kindle shows up on the others.' +
+      '<b>Live.</b> Chat refreshes every second, the rest every five. A post made on one Kindle ' +
+      'shows up on the others without reloading.<br><br>' +
+      '<b>Saved for everyone.</b> Accounts, chat, posts, pins and topics are kept on the server.' +
       '</p></div>';
 
     shell('HQ', body);
     wireStart();
   }
 
-  function wireStart() {
-    var st = document.getElementById('start');
-    if (st) { st.onclick = function (e) { e.preventDefault(); openSignin(); return false; }; }
+  function namesOf(accs) {
+    var out = [];
+    for (var i = 0; i < accs.length; i++) { out.push(accs[i].name); }
+    return out.join(', ');
   }
 
   /* ----- chat ----- */
 
-  function pageChat() {
-    var all = list(tree.chat);
+  function chatShown() {
     var shown = CHAT_SHOWN;
     try {
       var v = parseInt(window.localStorage.getItem(VIEW_KEY), 10);
       if (v && v > shown) { shown = v; }
     } catch (e) {}
-    var msgs = all.slice(Math.max(0, all.length - shown));
-    var body = '';
+    return shown;
+  }
+
+  function chatLogHtml() {
+    var all = list(tree.chat);
+    var msgs = all.slice(Math.max(0, all.length - chatShown()));
     var log = '';
     var i;
-
     if (!msgs.length) {
-      log = '<div class="empty"><b>No messages yet.</b><br><span class="small">Say hello.</span></div>';
-    } else {
-      for (i = 0; i < msgs.length; i++) {
-        var m = msgs[i];
-        log += '<div class="msg' + (m.by === me() ? ' me' : '') + '">' +
-          '<span class="who">' + esc(m.by) + '</span>' +
-          '<span class="when">' + when(m.at) + '</span>' +
-          '<div class="text">' + esc(m.text) + '</div>' +
-        '</div>';
-      }
+      return '<div class="empty"><b>No messages yet.</b><br><span class="small">Say hello.</span></div>';
     }
+    for (i = 0; i < msgs.length; i++) {
+      var m = msgs[i];
+      log += '<div class="msg' + (m.by === me() ? ' me' : '') + '">' +
+        '<span class="who">' + esc(m.by) + '</span>' +
+        '<span class="when" data-at="' + (m.at || 0) + '">' + when(m.at) + '</span>' +
+        '<div class="text">' + esc(m.text) + '</div>' +
+      '</div>';
+    }
+    return log;
+  }
+
+  function pageChat() {
+    var all = list(tree.chat);
+    var shown = chatShown();
+    var shownCount = Math.min(shown, all.length);
+    var body = '';
 
     body += statusBox();
     body += nameBox();
-    body += '<p class="small dim">' + all.length + ' message' + (all.length === 1 ? '' : 's') +
-            ' saved. Showing the last ' + msgs.length + '. The server keeps the latest ' + KEEP_CHAT + '.</p>';
-    body += '<div class="chatlog" id="chatlog">' + log + '</div>';
-    if (all.length > msgs.length) {
-      body += '<a class="btn small" href="#" id="chatmore">Load ' +
-              Math.min(CHAT_SHOWN, all.length - msgs.length) + ' older</a>';
-    }
+    body += '<p class="small dim" id="chatcount">' + all.length + ' message' + (all.length === 1 ? '' : 's') +
+            ' saved. Showing the last ' + shownCount + '. Live: new messages appear on their own.</p>';
+    body += '<div class="chatlog" id="chatlog">' + chatLogHtml() + '</div>';
+    body += '<div id="morebox">' + moreButtonHtml(all.length, shownCount) + '</div>';
     body += '<div class="chatform">' +
       '<form id="chatform" action="#chat">' +
         '<label for="chattext">Message</label>' +
@@ -536,19 +770,11 @@ var ROAK = (function () {
     '</div>';
 
     shell('Chat', body);
-
-    var lg = document.getElementById('chatlog');
-    if (lg) { lg.scrollTop = lg.scrollHeight; }
+    wireStart();
+    scrollChatToEnd();
 
     var more = document.getElementById('chatmore');
-    if (more) {
-      more.onclick = function (e) {
-        e.preventDefault();
-        try { window.localStorage.setItem(VIEW_KEY, String(shown + CHAT_SHOWN)); } catch (err) {}
-        render();
-        return false;
-      };
-    }
+    if (more) { wireMore(more, shown, all.length); }
 
     document.getElementById('chatform').onsubmit = function (e) {
       e.preventDefault();
@@ -556,14 +782,67 @@ var ROAK = (function () {
       var t = trim(document.getElementById('chattext').value);
       if (!t) { toast('Type a message'); return false; }
       document.getElementById('chattext').value = '';
+      var msg = { id: newId('c'), by: me(), text: t, at: (new Date()).getTime() };
+      /* show it straight away, before the server answers */
+      tree.chat = list(tree.chat).concat([msg]);
+      var log = document.getElementById('chatlog');
+      if (log) {
+        if (log.getElementsByClassName('empty').length) { log.innerHTML = ''; }
+        log.innerHTML += '<div class="msg me"><span class="who">' + esc(msg.by) +
+          '</span><span class="when">just now</span><div class="text">' + esc(msg.text) + '</div></div>';
+        scrollChatToEnd();
+      }
       change(function (d) {
-        d.chat.push({ id: newId('c'), by: me(), text: t, at: (new Date()).getTime() });
+        d.chat = list(d.chat).concat([msg]);
       }, function (ok) {
-        render();
-        toast(ok ? 'Sent' : 'Saved on this device — will sync');
+        refresh();
+        if (!ok) { toast('Saved on this device — will send when back online'); }
       });
       return false;
     };
+  }
+
+  function moreButtonHtml(total, shownCount) {
+    if (total <= shownCount) { return ''; }
+    return '<a class="btn small" href="#" id="chatmore">Load ' +
+           Math.min(CHAT_SHOWN, total - shownCount) + ' older</a>';
+  }
+
+  function wireMore(a, shown, total) {
+    a.onclick = function (e) {
+      e.preventDefault();
+      try { window.localStorage.setItem(VIEW_KEY, String(shown + CHAT_SHOWN)); } catch (err) {}
+      render();
+      return false;
+    };
+  }
+
+  function scrollChatToEnd() {
+    var lg = document.getElementById('chatlog');
+    if (lg) { lg.scrollTop = lg.scrollHeight; }
+  }
+
+  /* redraw the chat without touching the box you may be typing in */
+  function softChat() {
+    var log = document.getElementById('chatlog');
+    if (!log) { render(); return; }
+    var atEnd = (log.scrollHeight - log.scrollTop - log.clientHeight) < 40;
+    var html = chatLogHtml();
+    if (log.innerHTML !== html) {
+      log.innerHTML = html;
+      if (atEnd) { scrollChatToEnd(); }
+    }
+    var all = list(tree.chat);
+    var c = document.getElementById('chatcount');
+    if (c) {
+      var shownCount = Math.min(chatShown(), all.length);
+      c.innerHTML = all.length + ' message' + (all.length === 1 ? '' : 's') +
+        ' saved. Showing the last ' + shownCount + '. Live: new messages appear on their own.';
+    }
+    var mb = document.getElementById('morebox');
+    if (mb) { mb.innerHTML = moreButtonHtml(all.length, Math.min(chatShown(), all.length)); }
+    var stamp = document.getElementById('live');
+    if (stamp) { stamp.innerHTML = stampLine(); }
   }
 
   /* ----- neighborhood ----- */
@@ -610,6 +889,7 @@ var ROAK = (function () {
     body += '<h2>Posts</h2>' + listHtml;
 
     shell('Neighborhood', body);
+    wireStart();
 
     document.getElementById('postform').onsubmit = function (e) {
       e.preventDefault();
@@ -680,8 +960,7 @@ var ROAK = (function () {
       for (i = 0; i < pins.length; i++) {
         var p = pins[i];
         listHtml += '<div class="post pin">' +
-          '<div class="post-meta"><span class="who">' + esc(p.by) + '</span> &middot; ' + when(p.at) +
-            (p.by === me() ? '' : '') + '</div>' +
+          '<div class="post-meta"><span class="who">' + esc(p.by) + '</span> &middot; ' + when(p.at) + '</div>' +
           '<div class="post-body">' + esc(p.text) + '</div>' +
           '<div class="post-actions">' +
             (p.by === me()
@@ -698,7 +977,7 @@ var ROAK = (function () {
     body += '<div class="box tight"><p class="small" style="margin:0">' +
       '<b>The permanent board.</b> Pins are never trimmed or cleared by the site. ' +
       'Only you can edit or unpin your own pins. Keep it to things worth keeping: ' +
-      'links, rules, a phone number, a book you finished, a meeting time.</p></div>';
+      'links, rules, a book you finished, a meeting time.</p></div>';
 
     var editId = qs('edit');
     var editing = null;
@@ -715,6 +994,7 @@ var ROAK = (function () {
     body += '<h2>Pinned</h2>' + listHtml;
 
     shell(editing ? 'Editing pin' : 'Pinboard', body);
+    wireStart();
 
     document.getElementById('pinform').onsubmit = function (e) {
       e.preventDefault();
@@ -794,6 +1074,7 @@ var ROAK = (function () {
         '<button class="btn wide" type="submit">Post reply</button>' +
       '</form>';
       shell(t.title, body);
+      wireStart();
 
       document.getElementById('replyform').onsubmit = function (e) {
         e.preventDefault();
@@ -845,6 +1126,7 @@ var ROAK = (function () {
     }
 
     shell('Topics', body);
+    wireStart();
 
     document.getElementById('topicform').onsubmit = function (e) {
       e.preventDefault();
@@ -981,8 +1263,6 @@ var ROAK = (function () {
 
   /* ---------- boot ---------- */
 
-  var lastRoute = '';
-
   function render() {
     var r = route();
     closeSignin();
@@ -992,7 +1272,6 @@ var ROAK = (function () {
     else if (r === 'topics') { pageTopics(); }
     else if (r === 'js') { pageJs(); }
     else { pageHome(); }
-    lastRoute = r;
   }
 
   /* redraw without jumping to the top (used by the live refresh) */
@@ -1025,7 +1304,7 @@ var ROAK = (function () {
     tree: function () { return tree; },
     list: list,
     me: me,
-    setMe: setMe,
+    myKey: myKey,
     esc: esc,
     toast: toast,
     cloudOn: cloudOn
