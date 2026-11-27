@@ -1,0 +1,70 @@
+{
+  "rules": {
+    "hq": {
+      ".read": true,
+      ".write": true,
+      ".validate": "newData.hasChildren(['meta', 'chat', 'neighborhood', 'topics', 'pins', 'likes'])",
+
+      "meta": {
+        ".validate": "newData.hasChildren(['updated', 'by'])",
+        "updated": { ".validate": "newData.isNumber()" },
+        "by": { ".validate": "newData.isString() && newData.val().length <= 20" }
+      },
+
+      "chat": {
+        "$msg": {
+          ".validate": "newData.hasChildren(['by', 'text', 'at'])",
+          "by": { ".validate": "newData.isString() && newData.val().length <= 20" },
+          "text": { ".validate": "newData.isString() && newData.val().length <= 500" },
+          "at": { ".validate": "newData.isNumber()" }
+        }
+      },
+
+      "neighborhood": {
+        "$post": {
+          ".validate": "newData.hasChildren(['by', 'text', 'at'])",
+          "by": { ".validate": "newData.isString() && newData.val().length <= 20" },
+          "text": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+          "tag": { ".validate": "newData.isString() && newData.val().length <= 16" },
+          "at": { ".validate": "newData.isNumber()" }
+        }
+      },
+
+      "pins": {
+        "$pin": {
+          ".validate": "newData.hasChildren(['by', 'text', 'at'])",
+          "by": { ".validate": "newData.isString() && newData.val().length <= 20" },
+          "text": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+          "at": { ".validate": "newData.isNumber()" },
+          "edited": { ".validate": "newData.isNumber()" }
+        }
+      },
+
+      "likes": {
+        "$like": {
+          ".validate": "newData.hasChildren(['id', 'by', 'at'])",
+          "id": { ".validate": "newData.isString() && newData.val().length <= 40" },
+          "by": { ".validate": "newData.isString() && newData.val().length <= 20" },
+          "at": { ".validate": "newData.isNumber()" }
+        }
+      },
+
+      "topics": {
+        "$topic": {
+          ".validate": "newData.hasChildren(['title', 'by', 'at'])",
+          "title": { ".validate": "newData.isString() && newData.val().length <= 80" },
+          "by": { ".validate": "newData.isString() && newData.val().length <= 20" },
+          "at": { ".validate": "newData.isNumber()" },
+          "replies": {
+            "$reply": {
+              ".validate": "newData.hasChildren(['by', 'text', 'at'])",
+              "by": { ".validate": "newData.isString() && newData.val().length <= 20" },
+              "text": { ".validate": "newData.isString() && newData.val().length <= 2000" },
+              "at": { ".validate": "newData.isNumber()" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
