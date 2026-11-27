@@ -1,24 +1,16 @@
-/* ROAKSTASAWD HQ — backend settings
- *
- * Put your Firebase Realtime Database URL between the quotes below.
- * The site switches to the shared backend as soon as this is filled in;
- * while it says YOUR-PROJECT it works offline, on one device.
- *
- * Where to find the URL: Firebase console -> Build -> Realtime Database ->
- * the URL at the top of the data tab, e.g.
- *     https://fr-roak-hq-fr-default-rtdb.firebaseio.com
- * (a database outside us-central1 ends in .REGION.firebasedatabase.app)
- *
- * If you use a different backend that reads and writes a JSON document at
- * <url>/hq.json with plain GET and PUT, only "url" needs to change.
- */
-
 window.ROAK_BACKEND = {
-  url: 'https://fr-roak-hq-fr-default-rtdb.firebaseio.com',
+  /* Where the shared HQ lives. Leave empty and the site keeps everything on
+     this device only.
 
-  /* The AI chat's helper: a small web service that takes
-       POST { "question": "...", "history": [...], "user": "name" }
-     and answers { "answer": "..." }.
-     Until an address is filled in, the AI Chat page says the AI is not set up. */
+     Cloudflare (recommended — the Worker checks every password and every admin
+     action on the server). Put the Worker's address here, with /api on the end,
+     and its session token storage works the same way as before:
+       url: 'https://roak-hq.YOUR-SUBDOMAIN.workers.dev/api'
+
+     The old Firebase Realtime Database address also still works, but its rules
+     are open, so anyone could read the direct messages. */
+  url: '',
+
+  /* the AI helper the AI Chat app asks (optional) */
   ai: ''
 };
