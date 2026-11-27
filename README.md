@@ -127,3 +127,17 @@ reach the keyboard. The home page, the pinboard and the neighborhood still scrol
 The HQ screen is not a tab in the list any more: it is the launch screen, and every app
 page carries an **&times;** in the top-right corner that goes back to it. The favourites bar
 under the title holds the apps you starred, so the list itself stays short.
+
+## Admin
+
+The account named **blockwobble** is the owner of the HQ. Signed in as that account, an
+**Admin** button appears in the bottom bar (next to the star) and the `#admin` screen opens:
+ban and unban people, kick them, make other people admins, wipe one person's posts
+everywhere, delete an account, clear a whole board, and put a notice up on the pinboard.
+Nobody else can open the screen, and every action is refused unless the signed-in account is
+the owner.
+
+The power comes from the name, so it needs that account to exist and to be signed in with its
+password like anyone else. **Worth knowing:** the database rules are open, so anyone who knows
+how could write to the data directly with a plain HTTP request. Real security needs a server
+that checks the password — see SECURITY.md.
