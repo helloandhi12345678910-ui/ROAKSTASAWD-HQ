@@ -97,9 +97,8 @@ Then visit `http://localhost:8000/`.
 
 ## The top bar and favourites
 
-Every page carries a **top bar** with the apps you starred, and it stays pinned at the
-top of the screen while you scroll (by CSS where the browser has it, by script on older
-Kindles). Tap a star on the home tiles (or open **Favourites** with the &#9733; button at
+Every page carries **one bar of apps, along the bottom of the screen**, holding HQ, the
+star and the apps you starred. The old list of app links above the page is gone. Tap a star on the home tiles (or open **Favourites** with the &#9733; button at
 the left of the bar) to put an app up there; six at most. Tapping the app you are
 already on opens the Favourites screen, so it is easy to change your mind. Favourites
 are remembered on that device.
