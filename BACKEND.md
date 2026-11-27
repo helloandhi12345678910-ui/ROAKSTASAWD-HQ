@@ -26,7 +26,14 @@ nowhere near any of it.
 1. Go to <https://console.firebase.google.com/> and sign in with your Google account.
 2. **Create a project** → name it something like `roak-hq` → Google Analytics: **off** →
    Create. (Stay on the free **Spark** plan; no billing needed.)
-3. In the left menu: **Build → Realtime Database → Create Database**.
+3. Get to the Realtime Database — the console's menu wording changes, so try
+   these in order:
+   - the search box at the top of the console: type **Realtime Database**;
+   - or **Build → Databases & Storage → Realtime Database** (older layout: **Build → Realtime Database**);
+   - or go straight to <https://console.firebase.google.com/project/fr-roak-hq-fr/database/fr-roak-hq-fr-default-rtdb/data>
+     (swap the project id in the address if yours differs).
+
+   Then **Create Database**.
 4. Location: pick the one nearest the group (e.g. `us-central1`).
 5. Security rules: choose **Start in test mode** for now (we replace it in step 2).
 6. Copy the URL shown at the top of the data tab. It looks like one of:
