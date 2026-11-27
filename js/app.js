@@ -843,6 +843,41 @@ var ROAK = (function () {
     return h;
   }
 
+  /* Older Kindle browsers ignore position:sticky, so the bar is also stuck by
+     script on every scroll and resize. Harmless where CSS sticky works. */
+  var favStuck = false;
+
+  function stickBar() {
+    var b = document.getElementById('favbar');
+    if (!b || !b.style) { return; }
+    var y = 0;
+    try { y = window.pageYOffset || document.documentElement.scrollTop || 0; } catch (e) { y = 0; }
+    if (y > 40) {
+      if (favStuck) { return; }
+      favStuck = true;
+      b.style.position = 'fixed';
+      b.style.top = '0';
+      b.style.left = '0';
+      b.style.right = '0';
+      b.style.zIndex = '20';
+      b.style.borderTop = '2px solid #000000';
+      var h = b.offsetHeight || 56;
+      var sp = document.getElementById('favspace');
+      if (sp) { sp.style.height = h + 'px'; }
+    } else {
+      if (!favStuck) { return; }
+      favStuck = false;
+      b.style.position = '';
+      b.style.top = '';
+      b.style.left = '';
+      b.style.right = '';
+      b.style.zIndex = '';
+      b.style.borderTop = '';
+      var sp0 = document.getElementById('favspace');
+      if (sp0) { sp0.style.height = '0px'; }
+    }
+  }
+
   function shell(title, body) {
     var chat = list(tree.chat);
     var nb = list(tree.neighborhood);
@@ -868,7 +903,7 @@ var ROAK = (function () {
       '<div class="bar">' + whoBar +
         '<a href="#home"><span class="bar-title">ROAKSTASAWD</span></a>' +
       '</div>' +
-      '<div class="favstick">' + favBar(r) + '</div>' +
+      favBar(r) + '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div class="nav">' + nav + '</div>' +
       '<div class="wrap">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
@@ -885,6 +920,8 @@ var ROAK = (function () {
       '<div id="toast"></div>';
 
     document.getElementById('root').innerHTML = html;
+    favStuck = false;
+    stickBar();
 
     var sib = document.getElementById('signinbtn');
     if (sib) { sib.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
@@ -2145,8 +2182,11 @@ var ROAK = (function () {
   function boot() {
     if (!window.addEventListener) {
       window.onhashchange = render;
+      window.onscroll = stickBar;
     } else {
       window.addEventListener('hashchange', render, false);
+      window.addEventListener('scroll', stickBar, false);
+      window.addEventListener('resize', stickBar, false);
     }
     pull(function () {
       render();
