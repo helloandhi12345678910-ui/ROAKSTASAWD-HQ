@@ -47,10 +47,17 @@ paste the contents of [`database.rules.json`](database.rules.json) from this rep
 Press **Publish**.
 
 **If the Data tab says "Permission denied", this is the step that fixes it.**
-The rules in the repo name the database (`fr-roak-hq-fr`) and only allow that
-name, so the rules must be pasted **exactly as they are** — editing the name in
-one place without the other locks the site out. If you rename the database later,
-change the name in `database.rules.json` and in `js/backend.js` together.
+
+Publish the rules in **one go**: paste the whole file, replacing everything that
+was in the tab, then press Publish once. A first publish took effect for reads but
+not for writes until it was repeated with the file pasted cleanly — if that
+happens, check the tab has no leftovers above or below the pasted JSON (the tab
+must contain exactly the file) and press Publish again.
+
+If you ever want to rule out a rule problem, publish
+[`database.rules.open.json`](database.rules.open.json) instead — it is the
+shortest possible version that lets the site work — then come back to the full
+file once things save.
 
 What those rules do:
 
