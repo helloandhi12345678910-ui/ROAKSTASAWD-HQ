@@ -54,7 +54,9 @@ var ROAK = (function () {
       pins: [],
       likes: [],
       ai: { msgs: [] },
-      dm: {}
+      dm: {},
+      bans: [],
+      notices: []
     };
   }
 
@@ -71,6 +73,10 @@ var ROAK = (function () {
     if (!d.ai || typeof d.ai !== 'object' || !d.ai.msgs) { d.ai = { msgs: [] }; }
     d.ai.msgs = list(d.ai.msgs);
     if (!d.dm || typeof d.dm !== 'object') { d.dm = {}; }
+    if (!d.bans) { d.bans = b.bans; }
+    if (!d.notices) { d.notices = b.notices; }
+    d.bans = list(d.bans);
+    d.notices = list(d.notices);
     return d;
   }
 
@@ -411,6 +417,54 @@ var ROAK = (function () {
     return true;
   }
 
+  /* ---------- admin ----------
+     blockwobble is the owner of this place and holds every power. The name is the
+     source of the power: it is the account that was made under that name, signed
+     in with its password like anyone else. */
+
+  var OWNER_KEY = 'blockwobble';
+
+  function isOwner() {
+    var who = me();
+    return who !== '' && nameKey(who) === OWNER_KEY;
+  }
+
+  function isBanned(name) {
+    var key = nameKey(name);
+    var bans = list(tree.bans);
+    for (var i = 0; i < bans.length; i++) {
+      if (nameKey(bans[i].name) === key) { return true; }
+    }
+    return false;
+  }
+
+  function accountIsAdmin(name) {
+    var acc = accountNamed(name);
+    return !!(acc && acc.admin);
+  }
+
+  /* a message the admin typed, kept on the board it was about */
+  function noticeFor(kind, text) {
+    var n = list(tree.notices);
+    for (var i = 0; i < n.length; i++) {
+      if (n[i].kind === kind) { return n[i]; }
+    }
+    return null;
+  }
+
+  function setNotice(kind, text, done) {
+    var now = (new Date()).getTime();
+    change(function (d) {
+      var n = list(d.notices);
+      var keep = [];
+      for (var i = 0; i < n.length; i++) {
+        if (n[i].kind !== kind) { keep.push(n[i]); }
+      }
+      if (text) { keep.push({ id: newId('n'), kind: kind, text: text, by: me(), at: now }); }
+      d.notices = keep;
+    }, done || function () { render(); });
+  }
+
   function cleanName(n) {
     return String(n || '').replace(/^\s+|\s+$/g, '').replace(/\s+/g, ' ');
   }
@@ -737,6 +791,10 @@ var ROAK = (function () {
         done('That account is from the old version and has no password. Make a new account.');
         return;
       }
+      if (nameKey(acc.name) !== OWNER_KEY && (isBanned(acc.name) || acc.banned)) {
+        done('That account has been banned from this HQ.');
+        return;
+      }
       checkPassword(acc, password, function (ok) {
         if (ok && ok.needsStrong) {
           done('This browser cannot check this account\'s password. ' +
@@ -830,7 +888,8 @@ var ROAK = (function () {
     var mine = favs();
     var h = '<div class="favbar dock" id="favbar">' +
       '<a class="fav' + (r === 'home' ? ' on' : '') + '" href="#home" title="The HQ screen">HQ</a>' +
-      '<a class="fav" href="#favorites"' + (r === 'favorites' ? ' class="on"' : '') + ' title="Favourites">&#9733;</a>';
+      '<a class="fav" href="#favorites"' + (r === 'favorites' ? ' class="on"' : '') + ' title="Favourites">&#9733;</a>' +
+      (isOwner() ? '<a class="fav" href="#admin"' + (r === 'admin' ? ' class="on"' : '') + ' title="Admin">Admin</a>' : '');
     for (var i = 0; i < mine.length; i++) {
       var k = mine[i];
       var short = appLabel(k).replace('Neighborhood', 'Hood').replace('Pinboard', 'Pins');
@@ -1670,7 +1729,12 @@ var ROAK = (function () {
 
   function pagePinboard() {
     var pins = list(tree.pins).reverse();
+    var note = noticeFor('pins');
     var body = '';
+    if (note) {
+      body += '<div class="notice"><b>Notice</b><br>' + esc(note.text) +
+        '<br><span class="small dim">' + esc(note.by) + ' &middot; ' + when(note.at) + '</span></div>';
+    }
     var listHtml = '';
     var i;
 
@@ -1954,6 +2018,281 @@ var ROAK = (function () {
     if (!id) { return; }
     window.location.hash = 'dm?id=' + encodeURIComponent(id);
     render();
+  }
+
+  /* ---------- the admin screen (owner only) ---------- */
+
+  function pageAdmin() {
+    var body = '';
+    if (!isOwner()) {
+      body += '<div class="empty"><b>Admins only.</b><br>' +
+        '<span class="small">This screen belongs to the owner of the HQ.</span></div>' +
+        '<a class="btn" href="#home">Back to the HQ</a>';
+      shell('Admin', body);
+      return;
+    }
+
+    var accounts = list(tree.accounts);
+    var bans = list(tree.bans);
+    var pins = list(tree.pins);
+    var topics = list(tree.topics);
+    var posts = list(tree.neighborhood);
+    var chat = list(tree.chat);
+    var i;
+
+    body += statusBox();
+    body += '<div class="box tight"><p class="small" style="margin:0">' +
+      'You are signed in as <b>' + esc(me()) + '</b>, the owner. Everything below acts ' +
+      'on the shared HQ straight away.</p></div>';
+
+    /* people */
+    body += '<h2>People (' + accounts.length + ')</h2>';
+    body += '<div class="room"><div class="roomlist">';
+    if (!accounts.length) {
+      body += '<div class="empty"><b>No accounts yet.</b></div>';
+    }
+    for (i = 0; i < accounts.length; i++) {
+      var a = accounts[i];
+      var owner = nameKey(a.name) === OWNER_KEY;
+      var banned = isBanned(a.name) || !!a.banned;
+      var admin = !!a.admin;
+      body += '<div class="adminrow">' +
+        '<div class="adminname">' + esc(a.name) +
+          (owner ? ' <span class="tag">owner</span>' : '') +
+          (admin ? ' <span class="tag">admin</span>' : '') +
+          (banned ? ' <span class="tag">banned</span>' : '') +
+        '</div>' +
+        '<div class="adminacts">' +
+          (owner ? '<span class="small dim">The owner cannot be changed here.</span>' :
+            '<a class="btn small" href="#" data-ban="' + esc(a.name) + '">' + (banned ? 'Unban' : 'Ban') + '</a>' +
+            '<a class="btn small" href="#" data-admin="' + esc(a.name) + '">' + (admin ? 'Remove admin' : 'Make admin') + '</a>' +
+            '<a class="btn small" href="#" data-kick="' + esc(a.name) + '">Kick</a>' +
+            '<a class="btn small" href="#" data-purge="' + esc(a.name) + '">Purge their posts</a>' +
+            '<a class="btn small" href="#" data-forget="' + esc(a.name) + '">Delete account</a>') +
+        '</div>' +
+      '</div>';
+    }
+    body += '</div></div>';
+
+    /* boards */
+    body += '<h2>Boards</h2><div class="box tight"><p class="small" style="margin:0">' +
+      chat.length + ' chat messages &middot; ' + posts.length + ' neighborhood posts &middot; ' +
+      pins.length + ' pins &middot; ' + topics.length + ' topics</p></div>' +
+      '<a class="btn" href="#" id="aclearchat">Clear the chat</a> ' +
+      '<a class="btn" href="#" id="aclearboard">Clear the neighborhood</a> ' +
+      '<a class="btn" href="#" id="aclearpins">Clear the pinboard</a> ' +
+      '<a class="btn" href="#" id="acleartopics">Clear all topics</a>';
+
+    /* pinned notice */
+    var note = noticeFor('pins');
+    body += '<h2>Notice on the pinboard</h2>' +
+      '<div class="box tight"><p class="small" style="margin:0">' +
+      (note ? 'Now: ' + esc(note.text) : 'No notice up.') + '</p></div>' +
+      '<label for="adminnote">Write a notice for everyone</label>' +
+      '<textarea id="adminnote" maxlength="500">' + esc(note ? note.text : '') + '</textarea>' +
+      '<a class="btn wide" href="#" id="asavenote">Put the notice up</a>' +
+      (note ? '<a class="btn wide" href="#" id="aclearnote">Take it down</a>' : '');
+
+    /* bans and the rules */
+    body += '<h2>Bans (' + bans.length + ')</h2>';
+    if (!bans.length) {
+      body += '<div class="empty"><span class="small">Nobody is banned.</span></div>';
+    } else {
+      for (i = 0; i < bans.length; i++) {
+        body += '<div class="post"><div class="post-meta"><span class="who">' + esc(bans[i].name) +
+          '</span> &middot; ' + when(bans[i].at) + '</div>' +
+          '<div class="post-actions"><a href="#" data-unban="' + esc(bans[i].name) + '">Unban</a></div></div>';
+      }
+    }
+    body += '<div class="box tight"><p class="small" style="margin:0">' +
+      '<b>Kick</b> signs that person out everywhere and holds their messages until you let them back. ' +
+      '<b>Ban</b> also blocks them from signing in. ' +
+      '<b>Delete account</b> removes the account itself — that cannot be undone.</p></div>';
+
+    shell('Admin', body);
+    wireAdmin();
+  }
+
+  function wireAdmin() {
+    var root = document.getElementById('root');
+    var links = root.getElementsByTagName('a');
+    for (var j = 0; j < links.length; j++) {
+      var a = links[j];
+      var v;
+      if ((v = a.getAttribute('data-ban'))) {
+        a.onclick = (function (n) { return function (e) { e.preventDefault(); adminToggleBan(n); return false; }; })(v);
+      } else if ((v = a.getAttribute('data-unban'))) {
+        a.onclick = (function (n) { return function (e) { e.preventDefault(); adminUnban(n); return false; }; })(v);
+      } else if ((v = a.getAttribute('data-kick'))) {
+        a.onclick = (function (n) { return function (e) { e.preventDefault(); adminKick(n); return false; }; })(v);
+      } else if ((v = a.getAttribute('data-admin'))) {
+        a.onclick = (function (n) { return function (e) { e.preventDefault(); adminToggleAdmin(n); return false; }; })(v);
+      } else if ((v = a.getAttribute('data-purge'))) {
+        a.onclick = (function (n) { return function (e) { e.preventDefault(); adminPurge(n); return false; }; })(v);
+      } else if ((v = a.getAttribute('data-forget'))) {
+        a.onclick = (function (n) { return function (e) { e.preventDefault(); adminForget(n); return false; }; })(v);
+      }
+    }
+    var btns = [
+      ['aclearchat', function () { adminClear('chat', 'chat messages'); }],
+      ['aclearboard', function () { adminClear('neighborhood', 'neighborhood posts'); }],
+      ['aclearpins', function () { adminClear('pins', 'pins'); }],
+      ['acleartopics', function () { adminClear('topics', 'topics'); }],
+      ['asavenote', function () {
+        var t = trim(document.getElementById('adminnote').value);
+        setNotice('pins', t, function () { render(); toast(t ? 'Notice is up' : 'Notice taken down'); });
+      }],
+      ['aclearnote', function () { setNotice('pins', '', function () { render(); toast('Notice taken down'); }); }]
+    ];
+    for (var b = 0; b < btns.length; b++) {
+      var el = document.getElementById(btns[b][0]);
+      if (!el) { continue; }
+      el.onclick = (function (fn) {
+        return function (e) { e.preventDefault(); fn(); return false; };
+      })(btns[b][1]);
+    }
+  }
+
+  function adminOnly(fn) {
+    if (!isOwner()) { toast('Admins only'); return false; }
+    fn();
+    return true;
+  }
+
+  function adminToggleBan(name) {
+    adminOnly(function () {
+      if (isBanned(name)) { adminUnban(name); return; }
+      var now = (new Date()).getTime();
+      change(function (d) {
+        var b = list(d.bans);
+        b.push({ name: name, at: now, by: me() });
+        d.bans = b;
+        var accs = list(d.accounts);
+        for (var i = 0; i < accs.length; i++) {
+          if (nameKey(accs[i].name) === nameKey(name)) { accs[i].banned = true; }
+        }
+        d.accounts = accs;
+      }, function () { render(); toast(name + ' is banned'); });
+    });
+  }
+
+  function adminUnban(name) {
+    adminOnly(function () {
+      change(function (d) {
+        var b = list(d.bans);
+        var keep = [];
+        for (var i = 0; i < b.length; i++) {
+          if (nameKey(b[i].name) !== nameKey(name)) { keep.push(b[i]); }
+        }
+        d.bans = keep;
+        var accs = list(d.accounts);
+        for (var j = 0; j < accs.length; j++) {
+          if (nameKey(accs[j].name) === nameKey(name)) { accs[j].banned = false; }
+        }
+        d.accounts = accs;
+      }, function () { render(); toast(name + ' is welcome again'); });
+    });
+  }
+
+  /* hold a person's posts, messages and conversations until they are let back */
+  function adminKick(name) {
+    adminOnly(function () {
+      var now = (new Date()).getTime();
+      change(function (d) {
+        var accs = list(d.accounts);
+        for (var i = 0; i < accs.length; i++) {
+          if (nameKey(accs[i].name) === nameKey(name)) { accs[i].kicked = now; }
+        }
+        d.accounts = accs;
+        d.kicks = d.kicks || [];
+        d.kicks.push({ name: name, at: now, by: me() });
+      }, function () { render(); toast(name + ' is kicked out'); });
+    });
+  }
+
+  function adminToggleAdmin(name) {
+    adminOnly(function () {
+      change(function (d) {
+        var accs = list(d.accounts);
+        for (var i = 0; i < accs.length; i++) {
+          if (nameKey(accs[i].name) === nameKey(name)) { accs[i].admin = !accs[i].admin; }
+        }
+        d.accounts = accs;
+      }, function () { render(); toast('Changed'); });
+    });
+  }
+
+  /* remove everything a person ever wrote */
+  function adminPurge(name) {
+    adminOnly(function () {
+      var key = nameKey(name);
+      change(function (d) {
+        var keep = [];
+        var src = list(d.chat);
+        for (var i = 0; i < src.length; i++) { if (nameKey(src[i].by) !== key) { keep.push(src[i]); } }
+        d.chat = keep;
+        keep = [];
+        src = list(d.neighborhood);
+        for (var j = 0; j < src.length; j++) { if (nameKey(src[j].by) !== key) { keep.push(src[j]); } }
+        d.neighborhood = keep;
+        keep = [];
+        src = list(d.pins);
+        for (var k = 0; k < src.length; k++) { if (nameKey(src[k].by) !== key) { keep.push(src[k]); } }
+        d.pins = keep;
+        src = list(d.topics);
+        var topics = [];
+        for (var t = 0; t < src.length; t++) {
+          var replies = list(src[t].replies);
+          var rkeep = [];
+          for (var r = 0; r < replies.length; r++) {
+            if (nameKey(replies[r].by) !== key) { rkeep.push(replies[r]); }
+          }
+          src[t].replies = rkeep;
+          if (nameKey(src[t].by) !== key) { topics.push(src[t]); }
+        }
+        d.topics = topics;
+        var ai = d.ai && d.ai.msgs ? list(d.ai.msgs) : [];
+        var akeep = [];
+        for (var m = 0; m < ai.length; m++) { if (nameKey(ai[m].by) !== key) { akeep.push(ai[m]); } }
+        if (d.ai) { d.ai.msgs = akeep; }
+        if (d.dm) {
+          for (var id in d.dm) {
+            if (!d.dm.hasOwnProperty(id)) { continue; }
+            var msgs = list(d.dm[id].msgs);
+            var mkeep = [];
+            for (var q = 0; q < msgs.length; q++) { if (nameKey(msgs[q].by) !== key) { mkeep.push(msgs[q]); } }
+            d.dm[id].msgs = mkeep;
+          }
+        }
+      }, function () { render(); toast(name + '\'s posts are gone'); });
+    });
+  }
+
+  /* remove the account itself */
+  function adminForget(name) {
+    adminOnly(function () {
+      var key = nameKey(name);
+      change(function (d) {
+        var accs = list(d.accounts);
+        var keep = [];
+        for (var i = 0; i < accs.length; i++) {
+          if (nameKey(accs[i].name) !== key) { keep.push(accs[i]); }
+        }
+        d.accounts = keep;
+        var b = list(d.bans);
+        var bkeep = [];
+        for (var j = 0; j < b.length; j++) { if (nameKey(b[j].name) !== key) { bkeep.push(b[j]); } }
+        d.bans = bkeep;
+      }, function () { render(); toast(name + ' is deleted'); });
+    });
+  }
+
+  function adminClear(which, label) {
+    adminOnly(function () {
+      change(function (d) {
+        d[which] = [];
+      }, function () { render(); toast('The ' + label + ' are cleared'); });
+    });
   }
 
   /* ---------- the people picker (the + button) ---------- */
@@ -2602,6 +2941,7 @@ var ROAK = (function () {
     else if (r === 'ai') { pageAi(); }
     else if (r === 'code') { pageCode(); }
     else if (r === 'favorites') { pageFavorites(); }
+    else if (r === 'admin') { pageAdmin(); }
     else if (r === 'dm') { pageDm(qs('id'), ''); }
     else { pageHome(); }
   }
@@ -2646,6 +2986,17 @@ var ROAK = (function () {
     esc: esc,
     toast: toast,
     cloudOn: cloudOn,
+    /* exposed for testing the admin powers from Node */
+    isOwner: isOwner,
+    isBanned: isBanned,
+    adminToggleBan: adminToggleBan,
+    adminUnban: adminUnban,
+    adminKick: adminKick,
+    adminToggleAdmin: adminToggleAdmin,
+    adminPurge: adminPurge,
+    adminForget: adminForget,
+    adminClear: adminClear,
+    setNotice: setNotice,
     /* exposed for testing the Code app's runners from Node */
     runPy: runPy,
     runJs: runJs,
