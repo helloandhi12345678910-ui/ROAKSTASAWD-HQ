@@ -438,6 +438,15 @@ var ROAK = (function () {
     return false;
   }
 
+  function banFor(name) {
+    var key = nameKey(name);
+    var bans = list(tree.bans);
+    for (var i = 0; i < bans.length; i++) {
+      if (nameKey(bans[i].name) === key) { return bans[i]; }
+    }
+    return null;
+  }
+
   function accountIsAdmin(name) {
     var acc = accountNamed(name);
     return !!(acc && acc.admin);
@@ -792,7 +801,9 @@ var ROAK = (function () {
         return;
       }
       if (nameKey(acc.name) !== OWNER_KEY && (isBanned(acc.name) || acc.banned)) {
-        done('That account has been banned from this HQ.');
+        var bn = banFor(acc.name);
+        done('That account has been banned from this HQ.' +
+             (bn && bn.reason ? ' The reason: ' + bn.reason : ''));
         return;
       }
       checkPassword(acc, password, function (ok) {
@@ -2101,6 +2112,7 @@ var ROAK = (function () {
       for (i = 0; i < bans.length; i++) {
         body += '<div class="post"><div class="post-meta"><span class="who">' + esc(bans[i].name) +
           '</span> &middot; ' + when(bans[i].at) + '</div>' +
+          (bans[i].reason ? '<div class="post-body">' + esc(bans[i].reason) + '</div>' : '') +
           '<div class="post-actions"><a href="#" data-unban="' + esc(bans[i].name) + '">Unban</a></div></div>';
       }
     }
@@ -2162,10 +2174,41 @@ var ROAK = (function () {
   function adminToggleBan(name) {
     adminOnly(function () {
       if (isBanned(name)) { adminUnban(name); return; }
+      askBanReason(name);
+    });
+  }
+
+  /* a short sheet: why, then Ban. The reason is what the person is told. */
+  function askBanReason(name) {
+    var ov = document.getElementById('picker');
+    ov.innerHTML = '<div class="sheet">' +
+      '<h2 style="margin-top:0">Ban ' + esc(name) + '</h2>' +
+      '<label for="banreason">Reason (they see this when they try to sign in)</label>' +
+      '<textarea id="banreason" maxlength="200"></textarea>' +
+      '<a class="btn wide" href="#" id="banok">Ban ' + esc(name) + '</a>' +
+      '<a class="btn wide" href="#" id="bancancel">Cancel</a>' +
+    '</div>';
+    ov.style.display = 'block';
+    document.getElementById('banok').onclick = function (e) {
+      e.preventDefault();
+      var why = trim(document.getElementById('banreason').value);
+      closePicker();
+      doBan(name, why);
+      return false;
+    };
+    document.getElementById('bancancel').onclick = function (e) {
+      e.preventDefault();
+      closePicker();
+      return false;
+    };
+  }
+
+  function doBan(name, reason) {
+    adminOnly(function () {
       var now = (new Date()).getTime();
       change(function (d) {
         var b = list(d.bans);
-        b.push({ name: name, at: now, by: me() });
+        b.push({ name: name, at: now, by: me(), reason: reason || '' });
         d.bans = b;
         var accs = list(d.accounts);
         for (var i = 0; i < accs.length; i++) {
@@ -2990,6 +3033,8 @@ var ROAK = (function () {
     isOwner: isOwner,
     isBanned: isBanned,
     adminToggleBan: adminToggleBan,
+    doBan: doBan,
+    banFor: banFor,
     adminUnban: adminUnban,
     adminKick: adminKick,
     adminToggleAdmin: adminToggleAdmin,
