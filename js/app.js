@@ -1801,6 +1801,7 @@ var ROAK = (function () {
     }
     var stamp = document.getElementById('live');
     if (stamp) { stamp.innerHTML = stampLine(); }
+    stickBar();
   }
 
   /* ----- Code app: one box, many languages, runs in the browser ----- */
