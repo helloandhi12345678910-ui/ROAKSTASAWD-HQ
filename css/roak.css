@@ -324,7 +324,51 @@ select:focus {
   overflow: hidden;
 }
 
-/* JS app */
+/* Home tiles */
+.tiles {
+  margin-bottom: 12px;
+}
+.tile {
+  display: block;
+  border: 2px solid #000000;
+  color: #000000;
+  text-decoration: none;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+.tile:active {
+  background: #000000;
+  color: #ffffff;
+}
+.tile .tt {
+  display: block;
+  font-size: 20px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+.tile .tn {
+  display: block;
+  font-size: 15px;
+  margin-top: 2px;
+}
+.tile .td {
+  display: block;
+  font-size: 13px;
+  color: #444444;
+  margin-top: 2px;
+}
+.tile:active .td {
+  color: #ffffff;
+}
+
+/* Code app */
+.chips {
+  margin-bottom: 8px;
+}
+.chips a.on {
+  background: #000000;
+  color: #ffffff;
+}
 .codearea {
   font-family: "Courier New", Courier, monospace;
   font-size: 15px;
@@ -452,6 +496,16 @@ footer a {
   }
   .chatlog {
     height: 420px;
+  }
+  .tiles {
+    overflow: hidden;
+    margin-right: -10px;
+  }
+  .tile {
+    float: left;
+    width: 48%;
+    margin-right: 2%;
+    min-height: 92px;
   }
 }
 
