@@ -105,3 +105,11 @@ already on opens the Favourites screen, so it is easy to change your mind. Favou
 are remembered on that device.
 
 The home screen is a grid of six tiles, two across, each with a star in its corner.
+
+## Direct messages
+
+Chat has two rooms: **Global chat** and **Direct messages**. Direct messages are stored
+in the shared document under `dm`, keyed by the two names sorted (so both people land
+in the same conversation), with the display names kept beside the messages. The list of
+your conversations is built from your own name, so it is still there next time. The `+`
+on the Chat page picks a person; the `+` on Topics starts a new topic.
