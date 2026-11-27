@@ -16,6 +16,7 @@ var ROAK = (function () {
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
   var ME_KEY = 'roak.me';          /* { name, key } of the signed-in account */
   var VIEW_KEY = 'roak.view';      /* how many chat messages to show */
+  var FAV_KEY = 'roak.favs';       /* the apps starred for the top bar, on this device */
   var CHAT_SHOWN = 100;            /* chat messages rendered at once */
   var KEEP_CHAT = 300;             /* chat messages kept in the database */
   var FAST_MS = 1000;              /* refresh rate on the chat page */
@@ -340,6 +341,71 @@ var ROAK = (function () {
       else { window.localStorage.removeItem(ME_KEY); }
     } catch (e) {}
     return name;
+  }
+
+  /* ---------- favourites ---------- */
+
+  function appKeys() {
+    var out = [];
+    for (var i = 0; i < NAV.length; i++) { out.push(NAV[i][0]); }
+    return out;
+  }
+
+  function appLabel(key) {
+    for (var i = 0; i < NAV.length; i++) {
+      if (NAV[i][0] === key) { return NAV[i][1]; }
+    }
+    return key;
+  }
+
+  function favs() {
+    var raw = null;
+    try { raw = window.localStorage.getItem(FAV_KEY); } catch (e) { raw = null; }
+    var arr = null;
+    if (raw) { try { arr = JSON.parse(raw); } catch (e) { arr = null; } }
+    if (!arr || arr.length === undefined) { arr = []; }
+    var out = [];
+    for (var i = 0; i < arr.length; i++) {
+      if (isApp(arr[i]) && indexIn(out, arr[i]) < 0) { out.push(arr[i]); }
+    }
+    return out;
+  }
+
+  function isApp(key) {
+    for (var i = 0; i < NAV.length; i++) {
+      if (NAV[i][0] === key) { return true; }
+    }
+    return false;
+  }
+
+  function indexIn(arr, v) {
+    for (var i = 0; i < arr.length; i++) {
+      if (arr[i] === v) { return i; }
+    }
+    return -1;
+  }
+
+  function saveFavs(arr) {
+    try { window.localStorage.setItem(FAV_KEY, JSON.stringify(arr)); } catch (e) {}
+  }
+
+  /* star or unstar one app; returns the new state */
+  function toggleFav(key) {
+    if (!isApp(key)) { return false; }
+    var arr = favs();
+    var at = indexIn(arr, key);
+    if (at >= 0) {
+      arr.splice(at, 1);
+      saveFavs(arr);
+      return false;
+    }
+    if (arr.length >= 6) {
+      toast('The top bar holds six. Unstar one first.');
+      return false;
+    }
+    arr.push(key);
+    saveFavs(arr);
+    return true;
   }
 
   function cleanName(n) {
@@ -756,6 +822,26 @@ var ROAK = (function () {
     ['code', 'Code']
   ];
 
+  /* The top bar: every app you starred, one tap away, on any page.
+     Tapping the app you are on (or the star) goes to the Favourites screen. */
+  function favBar(r) {
+    var mine = favs();
+    var h = '<div class="favbar" id="favbar">' +
+      '<a class="fav" href="#favorites"' + (r === 'favorites' ? ' class="on"' : '') + ' title="Favourites">&#9733;</a>';
+    for (var i = 0; i < mine.length; i++) {
+      var k = mine[i];
+      var label = appLabel(k);
+      var short = label.replace('Neighborhood', 'Hood').replace('Pinboard', 'Pins');
+      h += '<a class="fav" href="#' + k + '"' + (r === k ? ' class="on"' : '') + '>' +
+        esc(short) + (r === k ? '<span class="favx" title="Change favourites">&times;</span>' : '') + '</a>';
+    }
+    if (!mine.length) {
+      h += '<span class="favempty">Tap &#9733; to put your apps up here.</span>';
+    }
+    h += '</div>';
+    return h;
+  }
+
   function shell(title, body) {
     var chat = list(tree.chat);
     var nb = list(tree.neighborhood);
@@ -781,6 +867,7 @@ var ROAK = (function () {
       '<div class="bar">' + whoBar +
         '<a href="#home"><span class="bar-title">ROAKSTASAWD</span></a>' +
       '</div>' +
+      favBar(r) +
       '<div class="nav">' + nav + '</div>' +
       '<div class="wrap">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
@@ -972,14 +1059,25 @@ var ROAK = (function () {
       ['ai', 'AI Chat', 'ask the AI', 'your own conversation'],
       ['code', 'Code', 'many languages', 'write and run code here']
     ];
+    var mine = favs();
     body += '<h2>Apps</h2><div class="tiles">';
     for (var t = 0; t < tiles.length; t++) {
-      body += '<a class="tile" href="#' + tiles[t][0] + '">' +
-        '<span class="tt">' + esc(tiles[t][1]) + '</span>' +
-        '<span class="tn">' + esc(tiles[t][2]) + '</span>' +
-        '<span class="td">' + esc(tiles[t][3]) + '</span></a>';
+      var k = tiles[t][0];
+      var starred = indexIn(mine, k) >= 0;
+      body += '<div class="tile">' +
+        '<a class="tilego" href="#' + k + '">' +
+          '<span class="tt">' + esc(tiles[t][1]) + '</span>' +
+          '<span class="tn">' + esc(tiles[t][2]) + '</span>' +
+          '<span class="td">' + esc(tiles[t][3]) + '</span>' +
+        '</a>' +
+        '<a class="tilestar' + (starred ? ' on' : '') + '" href="#" id="star-' + k + '" ' +
+          'title="' + (starred ? 'Remove from the top bar' : 'Put in the top bar') + '">' +
+          (starred ? '&#9733;' : '&#9734;') + '</a>' +
+      '</div>';
     }
     body += '</div>';
+    body += '<p class="small dim">Tap &#9733; on an app to keep it in the top bar. ' +
+            '<a href="#favorites">Manage favourites</a></p>';
 
     /* what is happening */
     body += '<h2>Right now</h2>';
@@ -1034,6 +1132,10 @@ var ROAK = (function () {
 
     shell('HQ', body);
 
+    for (var st = 0; st < tiles.length; st++) {
+      wireStar(tiles[st][0]);
+    }
+
     var bi = document.getElementById('homein');
     if (bi) { bi.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
     var bu = document.getElementById('homeup');
@@ -1048,6 +1150,50 @@ var ROAK = (function () {
         return false;
       };
     }
+  }
+
+  function wireStar(key) {
+    var el = document.getElementById('star-' + key);
+    if (!el) { return; }
+    el.onclick = function (e) {
+      e.preventDefault();
+      var now = toggleFav(key);
+      render();
+      toast(now ? appLabel(key) + ' is in the top bar' : appLabel(key) + ' is out of the top bar');
+      return false;
+    };
+  }
+
+  /* Pick what sits in the top bar: one star per app, up to six. */
+  function pageFavorites() {
+    var mine = favs();
+    var body = '';
+    body += '<p class="small dim">Star an app and it sits in the top bar on every page, ' +
+            'so you never have to go back to the HQ to reach it. Six at most.</p>';
+    for (var i = 0; i < NAV.length; i++) {
+      var k = NAV[i][0];
+      var on = indexIn(mine, k) >= 0;
+      body += '<a class="pick" id="pick-' + k + '" href="#' + k + '">' +
+        '<span class="star">' + (on ? '&#9733;' : '&#9734;') + '</span>' +
+        '<span class="nm">' + esc(NAV[i][1]) + '</span>' +
+        '<span class="st">' + (on ? 'in the top bar' : 'not in the top bar') + '</span>' +
+      '</a>';
+    }
+    body += '<a class="btn wide" href="#home">Back to the HQ</a>';
+
+    shell('Favourites', body);
+
+    function wirePick(key) {
+      var el = document.getElementById('pick-' + key);
+      if (!el) { return; }
+      el.onclick = function (e) {
+        e.preventDefault();
+        toggleFav(key);
+        render();
+        return false;
+      };
+    }
+    for (var j = 0; j < NAV.length; j++) { wirePick(NAV[j][0]); }
   }
 
   function pageChat() {
@@ -1101,6 +1247,36 @@ var ROAK = (function () {
       });
       return false;
     };
+  }
+
+  /* the chat log's markup, so a live refresh can redraw just the log */
+  function chatLogHtml() {
+    var all = list(tree.chat);
+    var shown = Math.min(chatShown(), all.length);
+    var part = all.slice(all.length - shown);
+    if (!part.length) {
+      return '<div class="empty"><b>No messages yet.</b><br>' +
+        '<span class="small">Say hello.</span></div>';
+    }
+    var h = '';
+    for (var i = 0; i < part.length; i++) {
+      var m = part[i];
+      h += '<div class="msg' + (m.by === me() ? ' me' : '') + '">' +
+        '<span class="who">' + esc(m.by) + '</span>' +
+        '<span class="when">' + when(m.at) + '</span>' +
+        '<div class="text">' + esc(m.text) + '</div>' +
+      '</div>';
+    }
+    return h;
+  }
+
+  /* how many chat messages to draw: remembered on this device, capped */
+  function chatShown() {
+    var n = 0;
+    try { n = parseInt(window.localStorage.getItem(VIEW_KEY), 10) || 0; } catch (e) { n = 0; }
+    if (!n || n < CHAT_SHOWN) { return CHAT_SHOWN; }
+    if (n > KEEP_CHAT) { return KEEP_CHAT; }
+    return n;
   }
 
   function moreButtonHtml(total, shownCount) {
@@ -1953,6 +2129,7 @@ var ROAK = (function () {
     else if (r === 'topics') { pageTopics(); }
     else if (r === 'ai') { pageAi(); }
     else if (r === 'code') { pageCode(); }
+    else if (r === 'favorites') { pageFavorites(); }
     else { pageHome(); }
   }
 
