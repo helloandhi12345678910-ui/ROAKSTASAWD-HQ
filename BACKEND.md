@@ -53,7 +53,8 @@ does not expire — that is why this step matters.
 
 ## 3. Point the site at it
 
-Edit [`js/backend.js`](js/backend.js) and put your URL between the quotes:
+The quickest way, no code editor needed: open `js/backend.js` **on github.com**,
+press the pencil (Edit), put your URL between the quotes:
 
 ```js
 window.ROAK_BACKEND = {
@@ -61,8 +62,22 @@ window.ROAK_BACKEND = {
 };
 ```
 
-Commit and push. The site switches to the shared backend on the next load; the
-status strip at the top says **LIVE · UPDATED …** when it is connected.
+then **Commit changes** on the `main` branch. GitHub Pages rebuilds in about a
+minute.
+
+Or tell the AI assistant the URL in the chat and it will make the commit for you.
+
+Either way the site switches to the shared backend on the next load; the status
+strip at the top says **LIVE · UPDATED …** when it is connected.
+
+## 4. Check it works
+
+1. Open the live site on your Kindle and on a computer.
+2. On both, tap **Sign in** and type a name.
+3. On the Kindle, post a pin. On the computer, open **Pinboard** — the pin is
+   there, and the strip says **LIVE · UPDATED … BY <name>**.
+4. Open `https://<your-url>/hq.json` in a browser: you should see the same posts
+   as JSON.
 
 While the URL still says `YOUR-PROJECT`, the site runs on the device's own copy
 of the data and nothing is shared.
