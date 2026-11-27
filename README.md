@@ -134,6 +134,7 @@ The account named **blockwobble** is the owner of the HQ. Signed in as that acco
 **Admin** button appears in the bottom bar (next to the star) and the `#admin` screen opens:
 ban and unban people, kick them, make other people admins, wipe one person's posts
 everywhere, delete an account, clear a whole board, and put a notice up on the pinboard.
+Banning asks for a reason, and that reason is what the person is told when they try to sign in.
 Nobody else can open the screen, and every action is refused unless the signed-in account is
 the owner.
 
