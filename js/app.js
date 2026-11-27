@@ -217,8 +217,6 @@ var ROAK = (function () {
         if (box.innerHTML !== h) { box.innerHTML = h; }
       }
       if (!changed) { return; }
-      var r = route();
-      if (r === 'js') { return; }
       if (r === 'chat') { softChat(); }
       else { renderSoft(); }
     });
@@ -253,6 +251,15 @@ var ROAK = (function () {
 
   /* ---------- accounts ---------- */
 
+  /* What is in the database about an account:
+       { id, name, hash, salt, at }
+     The password itself is never stored, never sent and never kept anywhere but
+     the browser's memory while you type it. Only a slow salted hash goes up. */
+
+  var PBKDF2_ITER = 60000;          /* enough for a small group, fast enough on a Kindle */
+  var HASH_BUDGET_MS = 4000;        /* a hash slower than this is too much for a Kindle */
+  var TRY_MS = 15000;               /* a Kindle can be very slow: wait this long for PBKDF2 */
+
   function me() {
     var raw = null;
     try { raw = window.localStorage.getItem(ME_KEY); } catch (e) {}
@@ -263,22 +270,10 @@ var ROAK = (function () {
     return '';                       /* old plain-name sign-ins are not accounts */
   }
 
-  function myKey() {
-    var raw = null;
-    try { raw = window.localStorage.getItem(ME_KEY); } catch (e) {}
-    if (!raw) { return ''; }
-    var o = null;
-    try { o = JSON.parse(raw); } catch (e) { o = null; }
-    return o && o.key ? o.key : '';
-  }
-
-  function setMe(name, key) {
+  function setMe(name) {
     try {
-      if (name) {
-        window.localStorage.setItem(ME_KEY, JSON.stringify({ name: name, key: key || '' }));
-      } else {
-        window.localStorage.removeItem(ME_KEY);
-      }
+      if (name) { window.localStorage.setItem(ME_KEY, JSON.stringify({ name: name })); }
+      else { window.localStorage.removeItem(ME_KEY); }
     } catch (e) {}
     return name;
   }
@@ -303,15 +298,6 @@ var ROAK = (function () {
     return null;
   }
 
-  function randomKey() {
-    var s = '';
-    var chars = 'abcdefghijkmnpqrstuvwxyz23456789';
-    for (var i = 0; i < 24; i++) {
-      s += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return s;
-  }
-
   function signedIn() {
     return me() !== '';
   }
@@ -323,48 +309,250 @@ var ROAK = (function () {
     return false;
   }
 
-  /* Every account has a private key; your own key is what lets the site edit
-     or delete your posts. It never leaves this device except to be written
-     back in the database with the rest of the tree. */
-  function signUp(name, key, done) {
-    name = cleanName(name);
-    if (!name) { done('Type a name.'); return; }
-    if (name.length > 20) { done('Keep it to 20 letters.'); return; }
-    if (nameKey(name).length < 2) { done('Use at least 2 letters or numbers.'); return; }
+  /* ---------- hashing ---------- */
 
-    change(function (d) {
-      var accs = list(d.accounts);
-      for (var i = 0; i < accs.length; i++) {
-        if (nameKey(accs[i].name) === nameKey(name)) {
-          throw { taken: true };
-        }
+  function hexOf(bytes) {
+    var s = '';
+    for (var i = 0; i < bytes.length; i++) {
+      var h = bytes[i].toString(16);
+      s += h.length < 2 ? '0' + h : h;
+    }
+    return s;
+  }
+
+  function bytesOfHex(hex) {
+    var out = [];
+    for (var i = 0; i < hex.length; i += 2) { out.push(parseInt(hex.substr(i, 2), 16)); }
+    return out;
+  }
+
+  function randomSalt() {
+    var bytes = [];
+    var strong = false;
+    try {
+      if (window.crypto && window.crypto.getRandomValues) {
+        var buf = new Uint8Array(16);
+        window.crypto.getRandomValues(buf);
+        for (var i = 0; i < buf.length; i++) { bytes.push(buf[i]); }
+        strong = true;
       }
-      accs.push({ id: newId('a'), name: name, key: key, at: (new Date()).getTime() });
-      d.accounts = accs;
-    }, function (ok) {
-      if (!ok) { done('Could not reach the server. Try again.'); return; }
-      setMe(name, key);
-      done(null);
+    } catch (e) { strong = false; }
+    if (!strong) {
+      for (var j = 0; j < 16; j++) { bytes.push(Math.floor(Math.random() * 256)); }
+    }
+    return hexOf(bytes);
+  }
+
+
+  /* ---------- fallback hash: a compact SHA-256, for browsers without Web Crypto ---------- */
+
+  var HASH_BROKEN_KEY = 'roak.nohwc';
+
+  function hashBroken() {
+    try { return window.localStorage.getItem(HASH_BROKEN_KEY) === '1'; } catch (e) { return false; }
+  }
+
+  function markHashBroken() {
+    try { window.localStorage.setItem(HASH_BROKEN_KEY, '1'); } catch (e) {}
+  }
+
+  function sha256Hex(str) {
+    function rrot(x, n) { return (x >>> n) | (x << (32 - n)); }
+    var K = [
+      0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+    ];
+    var H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+
+    var bytes = [];
+    for (var i = 0; i < str.length; i++) {
+      var c = str.charCodeAt(i);
+      if (c < 0x80) { bytes.push(c); }
+      else if (c < 0x800) { bytes.push(0xc0 | (c >> 6), 0x80 | (c & 63)); }
+      else { bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63)); }
+    }
+    var bitLen = bytes.length * 8;
+    bytes.push(0x80);
+    while (bytes.length % 64 !== 56) { bytes.push(0); }
+    for (var b = 7; b >= 0; b--) {
+      bytes.push(b >= 4 ? 0 : ((bitLen >>> (b * 8)) & 255));
+    }
+
+    var w = [];
+    for (var off = 0; off < bytes.length; off += 64) {
+      var t;
+      for (t = 0; t < 16; t++) {
+        w[t] = (bytes[off + t * 4] << 24) | (bytes[off + t * 4 + 1] << 16) |
+               (bytes[off + t * 4 + 2] << 8) | bytes[off + t * 4 + 3];
+      }
+      for (t = 16; t < 64; t++) {
+        var s0 = rrot(w[t - 15], 7) ^ rrot(w[t - 15], 18) ^ (w[t - 15] >>> 3);
+        var s1 = rrot(w[t - 2], 17) ^ rrot(w[t - 2], 19) ^ (w[t - 2] >>> 10);
+        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+      }
+      var a = H[0], bb = H[1], cc = H[2], dd = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (t = 0; t < 64; t++) {
+        var S1 = rrot(e, 6) ^ rrot(e, 11) ^ rrot(e, 25);
+        var ch = (e & f) ^ (~e & g);
+        var temp1 = (h + S1 + ch + K[t] + w[t]) | 0;
+        var S0 = rrot(a, 2) ^ rrot(a, 13) ^ rrot(a, 22);
+        var maj = (a & bb) ^ (a & cc) ^ (bb & cc);
+        var temp2 = (S0 + maj) | 0;
+        h = g; g = f; f = e; e = (dd + temp1) | 0;
+        dd = cc; cc = bb; bb = a; a = (temp1 + temp2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + bb) | 0; H[2] = (H[2] + cc) | 0; H[3] = (H[3] + dd) | 0;
+      H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    var out = '';
+    for (var k = 0; k < 8; k++) {
+      var v = H[k] >>> 0;
+      out += ('00000000' + v.toString(16)).slice(-8);
+    }
+    return out;
+  }
+
+  /* Every account records which method made its hash, because a browser can
+     advertise Web Crypto and then be too slow for it, or never answer at all.
+     Both methods are salted and deterministic, so any device can check any
+     account as long as it uses the method the account was made with. */
+  function hashPassword(password, saltHex, done) {
+    var plain = function () {
+      done('sha256$' + hexOf(bytesOfHex(sha256Hex(saltHex + ':' + password))));
+    };
+    var subtle = null;
+    try { subtle = window.crypto && window.crypto.subtle ? window.crypto.subtle : null; } catch (e) { subtle = null; }
+    var enc = null;
+    try { enc = window.TextEncoder ? new window.TextEncoder() : null; } catch (e) { enc = null; }
+
+    if (!subtle || !enc || !subtle.importKey || !subtle.deriveBits || hashBroken()) {
+      plain();
+      return;
+    }
+
+    var saltBytes = new Uint8Array(bytesOfHex(saltHex));
+    var pwBytes = enc.encode(password);
+    var started = (new Date()).getTime();
+    var settled = false;
+
+    function give(hash) {
+      if (settled) { return; }
+      settled = true;
+      done(hash);
+    }
+
+    window.setTimeout(function () {
+      if (settled) { return; }
+      markHashBroken();           /* still nothing after a long wait: not usable here */
+      give('sha256$' + hexOf(bytesOfHex(sha256Hex(saltHex + ':' + password))));
+    }, TRY_MS);
+
+    try {
+      subtle.importKey('raw', pwBytes, { name: 'PBKDF2' }, false, ['deriveBits'])
+        .then(function (km) {
+          return subtle.deriveBits(
+            { name: 'PBKDF2', salt: saltBytes, iterations: PBKDF2_ITER, hash: 'SHA-256' },
+            km, 256);
+        })
+        .then(function (bits) {
+          if (settled) { return; }
+          if ((new Date()).getTime() - started > HASH_BUDGET_MS) {
+            markHashBroken();     /* too slow on this device: use the fallback from now on */
+            give('sha256$' + hexOf(bytesOfHex(sha256Hex(saltHex + ':' + password))));
+            return;
+          }
+          give('pbkdf2:' + PBKDF2_ITER + '$' + hexOf(new Uint8Array(bits)));
+        })
+        .catch(function () {
+          markHashBroken();
+          give('sha256$' + hexOf(bytesOfHex(sha256Hex(saltHex + ':' + password))));
+        });
+    } catch (e) {
+      markHashBroken();
+      give('sha256$' + hexOf(bytesOfHex(sha256Hex(saltHex + ':' + password))));
+    }
+  }
+
+  /* check a password against one account, using that account's own method */
+  function checkPassword(account, password, done) {
+    var want = String(account.hash || '');
+    var salt = account.salt || '';
+    if (want.indexOf('pbkdf2:') !== 0) {
+      hashPassword(password, salt, function (hash) { done(hash === want); });
+      return;
+    }
+
+    var iter = parseInt(String(want.split('$')[0]).split(':')[1], 10) || PBKDF2_ITER;
+    derivePbkdf2(password, salt, iter, function (hash) {
+      if (hash === want) { done(true); return; }
+      if (hash === null) {
+        /* this browser cannot do the account's method: say so, do not guess */
+        done({ needsStrong: true });
+        return;
+      }
+      done(false);
     });
   }
 
-  /* write with a name check that runs inside the same read-modify-write */
-  function signUpSafe(name, key, done) {
+  /* PBKDF2 through Web Crypto, giving up with null when the browser cannot */
+  function derivePbkdf2(password, saltHex, iter, cb) {
+    var subtle = null;
+    try { subtle = window.crypto && window.crypto.subtle ? window.crypto.subtle : null; } catch (e) { subtle = null; }
+    var enc = null;
+    try { enc = window.TextEncoder ? new window.TextEncoder() : null; } catch (e) { enc = null; }
+    if (!subtle || !enc || !subtle.importKey || !subtle.deriveBits) { cb(null); return; }
+
+    var settled = false;
+    function give(v) {
+      if (settled) { return; }
+      settled = true;
+      cb(v);
+    }
+    window.setTimeout(function () { give(null); }, TRY_MS);
+
+    try {
+      subtle.importKey('raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveBits'])
+        .then(function (km) {
+          return subtle.deriveBits(
+            { name: 'PBKDF2', salt: new Uint8Array(bytesOfHex(saltHex)), iterations: iter, hash: 'SHA-256' },
+            km, 256);
+        })
+        .then(function (bits) { give('pbkdf2:' + iter + '$' + hexOf(new Uint8Array(bits))); })
+    } catch (e) {
+      give(null);
+    }
+  }
+
+  /* ---------- sign up / sign in ---------- */
+
+  function passwordProblem(pw) {
+    if (!pw) { return 'Type a password.'; }
+    if (pw.length < 6) { return 'Use at least 6 characters.'; }
+    if (pw.length > 100) { return 'Keep it under 100 characters.'; }
+    return '';
+  }
+
+  function addAccount(name, hash, salt, done) {
     pull(function () {
       if (findAccount(name)) { done('That name is taken. Pick another.'); return; }
-      var taken = false;
       var d = tree;
       var accs = list(d.accounts);
       for (var i = 0; i < accs.length; i++) {
-        if (nameKey(accs[i].name) === nameKey(name)) { taken = true; }
+        if (nameKey(accs[i].name) === nameKey(name)) { done('That name is taken. Pick another.'); return; }
       }
-      if (taken) { done('That name is taken. Pick another.'); return; }
-      accs.push({ id: newId('a'), name: name, key: key, at: (new Date()).getTime() });
+      accs.push({ id: newId('a'), name: name, hash: hash, salt: salt, at: (new Date()).getTime() });
       d.accounts = accs;
       d.meta = { updated: (new Date()).getTime(), by: name };
       tree = d;
       localPut(tree);
-      if (!cloudOn()) { setMe(name, key); done(null); return; }
+
+      if (!cloudOn()) { done(null); return; }
 
       var req = new XMLHttpRequest();
       req.open('PUT', rootUrl() + 'hq.json', true);
@@ -373,30 +561,59 @@ var ROAK = (function () {
         if (req.readyState !== 4) { return; }
         if (req.status >= 200 && req.status < 300) {
           state = 'ready';
-          setMe(name, key);
           done(null);
         } else {
           state = 'offline';
           done('Could not reach the server. Try again.');
         }
       };
-      try {
-        req.send(JSON.stringify(tree));
-      } catch (e) {
-        state = 'offline';
-        done('Could not reach the server. Try again.');
-      }
+      try { req.send(JSON.stringify(tree)); }
+      catch (e) { state = 'offline'; done('Could not reach the server. Try again.'); }
     });
   }
 
-  function signIn(name, key, done) {
+  function signUp(name, password, password2, done) {
+    name = cleanName(name);
+    if (!name) { done('Type a name.'); return; }
+    if (name.length > 20) { done('Keep the name to 20 letters.'); return; }
+    if (nameKey(name).length < 2) { done('Use at least 2 letters or numbers.'); return; }
+    var prob = passwordProblem(password);
+    if (prob) { done(prob); return; }
+    if (password !== password2) { done('The two passwords are not the same.'); return; }
+
+    pull(function () {
+      if (findAccount(name)) { done('That name is taken. Pick another.'); return; }
+      var salt = randomSalt();
+      hashPassword(password, salt, function (hash) {
+        addAccount(name, hash, salt, function (err) {
+          if (!err) { setMe(name); }
+          done(err);
+        });
+      });
+    });
+  }
+
+  function signIn(name, password, done) {
+    name = cleanName(name);
+    if (!name) { done('Type your name.'); return; }
+    if (!password) { done('Type your password.'); return; }
     pull(function () {
       var acc = findAccount(name);
-      if (!acc) { done('No account called "' + cleanName(name) + '". Make one below.'); return; }
-      if (!key) { done('This device is signed out. Sign in again or make a new account.'); return; }
-      if (acc.key !== key) { done('That key does not match. Check it and try again.'); return; }
-      setMe(acc.name, acc.key);
-      done(null);
+      if (!acc) { done('No account called "' + name + '".'); return; }
+      if (!acc.salt || !acc.hash) {
+        done('That account is from the old version and has no password. Make a new account.');
+        return;
+      }
+      checkPassword(acc, password, function (ok) {
+        if (ok && ok.needsStrong) {
+          done('This browser cannot check this account\'s password. ' +
+               'Sign in from a newer browser, or make a new account here.');
+          return;
+        }
+        if (!ok) { done('Wrong password.'); return; }
+        setMe(acc.name);
+        done(null);
+      });
     });
   }
 
@@ -470,8 +687,7 @@ var ROAK = (function () {
     ['chat', 'Chat'],
     ['neighborhood', 'Neighborhood'],
     ['pinboard', 'Pinboard'],
-    ['topics', 'Topics'],
-    ['js', 'JS App']
+    ['topics', 'Topics']
   ];
 
   function shell(title, body) {
@@ -551,32 +767,42 @@ var ROAK = (function () {
     var box = document.getElementById('signinbody');
     if (!box) { return; }
     var signup = mode === 'up';
+    var pw = '<input type="password" id="accpass" maxlength="100" autocomplete="off" ' +
+             'autocorrect="off" autocapitalize="off" spellcheck="false">';
+
     var html = '<div class="box">' +
       '<h2 style="margin-top:0">' + (signup ? 'Make an account' : 'Sign in') + '</h2>' +
       (error ? '<div class="box tight" style="border-width:3px"><b>' + esc(error) + '</b></div>' : '') +
       '<p class="small">' + (signup
-        ? 'An account is a name and a key. Names are unique &mdash; if someone has it, pick another.'
-        : 'Your name and the key this device was given when you made the account.') + '</p>' +
+        ? 'A name, and a password only you know. No two accounts can share a name.'
+        : 'Your name and password.') + '</p>' +
       '<form id="accform" action="#">' +
         '<label for="accname">Name</label>' +
-        '<input type="text" id="accname" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" value="' +
-          (signup ? '' : esc(me())) + '">' +
+        '<input type="text" id="accname" maxlength="20" autocomplete="off" autocorrect="off" ' +
+          'autocapitalize="off" spellcheck="false" value="' + (signup ? '' : esc(me())) + '">' +
+        '<label for="accpass">' + (signup ? 'Password (6+ characters)' : 'Password') + '</label>' +
+        pw +
         (signup
-          ? '<button class="btn wide" type="submit">Create account</button>'
-          : '<label for="acckey">Key</label>' +
-            '<input type="text" id="acckey" maxlength="40" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="from the device you made it on">' +
-            '<button class="btn wide" type="submit">Sign in</button>') +
+          ? '<label for="accpass2">Password again</label>' +
+            '<input type="password" id="accpass2" maxlength="100" autocomplete="off" ' +
+            'autocorrect="off" autocapitalize="off" spellcheck="false">'
+          : '') +
+        '<button class="btn wide" type="submit" id="accgo">' +
+          (signup ? 'Create account' : 'Sign in') + '</button>' +
         '<button class="btn wide" type="button" id="accswitch">' +
           (signup ? 'I already have an account' : 'I need an account') + '</button>' +
         '<button class="btn wide" type="button" id="acccancel">Cancel</button>' +
       '</form>' +
     '</div>';
 
-    if (signup) {
-      html += '<div class="box tight"><p class="small" style="margin:0">' +
-        'When the account is made, this device keeps the key and stays signed in. ' +
-        'The same name can never be taken twice.</p></div>';
-    }
+    html += '<div class="box tight"><p class="small" style="margin:0">' +
+      (signup
+        ? 'Your password is never stored or sent. This page turns it into a slow, salted ' +
+          'hash in your own browser and saves only that, so nobody reading the database can ' +
+          'get a password out of it. The same name can never be taken twice.'
+        : 'Wrong passwords get no hints. Nothing about your account is shown to anyone ' +
+          'who is not signed in as you.') +
+      '</p></div>';
     box.innerHTML = html;
 
     var f = document.getElementById('accname');
@@ -591,25 +817,26 @@ var ROAK = (function () {
     document.getElementById('accform').onsubmit = function (e) {
       e.preventDefault();
       var name = cleanName(document.getElementById('accname').value);
-      var keyEl = document.getElementById('acckey');
-      if (signup) {
-        if (!name) { drawSignin('up', 'Type a name.'); return false; }
-        if (nameKey(name).length < 2) { drawSignin('up', 'Use at least 2 letters or numbers.'); return false; }
-        signUpSafe(name, randomKey(), function (err) {
-          if (err) { drawSignin('up', err); return; }
-          closeSignin();
-          render();
-          toast('Welcome, ' + me());
-        });
-      } else {
-        var key = trim(keyEl ? keyEl.value : '');
-        signIn(name, key, function (err) {
-          if (err) { drawSignin('in', err); return; }
-          closeSignin();
-          render();
-          toast('Signed in as ' + me());
-        });
+      var pass = document.getElementById('accpass').value;
+      var pass2 = signup ? document.getElementById('accpass2').value : '';
+
+      function busy(flag) {
+        var b = document.getElementById('accgo');
+        if (!b) { return; }
+        b.disabled = flag;
+        b.innerHTML = flag ? 'Working&hellip;' : (signup ? 'Create account' : 'Sign in');
       }
+
+      busy(true);
+      var finish = function (err) {
+        if (err) { drawSignin(signup ? 'up' : 'in', err); return; }
+        closeSignin();
+        render();
+        toast(signup ? 'Welcome, ' + me() : 'Signed in as ' + me());
+      };
+
+      if (signup) { signUp(name, pass, pass2, finish); }
+      else { signIn(name, pass, finish); }
       return false;
     };
   }
@@ -632,7 +859,8 @@ var ROAK = (function () {
     if (signedIn()) { return ''; }
     return '<div class="box">' +
       '<b>Sign in to post.</b><br>' +
-      '<span class="small">An account is just a name, and no two accounts can share one.</span><br>' +
+      '<span class="small">An account is a name and a password only you know. ' +
+      'No two accounts can share a name.</span><br>' +
       '<a class="btn" href="#" id="start">Sign in</a> ' +
       '<a class="btn" href="#" id="startup">Make an account</a></div>';
   }
@@ -670,8 +898,6 @@ var ROAK = (function () {
             '<span class="m">' + pins.length + ' pin' + (pins.length === 1 ? '' : 's') + ' &middot; the permanent board</span></a>';
     body += '<a class="topic" href="#topics"><span class="t">Topics</span>' +
             '<span class="m">' + topics.length + ' thread' + (topics.length === 1 ? '' : 's') + ' &middot; one subject per thread</span></a>';
-    body += '<a class="topic" href="#js"><span class="t">JS App</span>' +
-            '<span class="m">write JavaScript, run it, see it work</span></a>';
 
     if (chat.length) {
       var last = chat[chat.length - 1];
@@ -1155,112 +1381,6 @@ var ROAK = (function () {
     };
   }
 
-  /* ----- JS app ----- */
-
-  var SNIPPETS = [
-    ['Hello', 'var name = "ROAKSTASAWD";\nreturn "Hello, " + name + "!";'],
-    ['FizzBuzz', 'var out = [];\nfor (var i = 1; i <= 20; i++) {\n  if (i % 15 === 0) out.push("FizzBuzz");\n  else if (i % 3 === 0) out.push("Fizz");\n  else if (i % 5 === 0) out.push("Buzz");\n  else out.push(i);\n}\nreturn out.join(" ");'],
-    ['Kindle check', 'var ua = navigator.userAgent;\nvar out = [];\nout.push("User agent: " + ua);\nout.push("Screen: " + screen.width + "x" + screen.height);\nout.push("Touch: " + (("ontouchstart" in window) ? "yes" : "no"));\nout.push("Async support: " + (function(){ try { eval("async function f(){}"); return "yes"; } catch (e) { return "no"; } })());\nreturn out.join("\\n");'],
-    ['Fibonacci', 'var a = 0, b = 1, out = [];\nfor (var i = 0; i < 15; i++) {\n  out.push(a);\n  var t = a + b; a = b; b = t;\n}\nreturn out.join(", ");'],
-    ['Page', 'document.body.innerHTML =\n  "<h1>Hello from the JS app</h1>" +\n  "<p>This HTML is drawn inside the preview box.</p>";\nreturn "Wrote to the preview.";']
-  ];
-
-  function pageJs() {
-    var body = '';
-    var i;
-    body += '<p class="small dim">Write JavaScript in the box, tap Run, read the output. ' +
-            'The preview box is a separate blank page, so drawing to it is safe.</p>';
-    body += '<div class="chips" id="chips">';
-    for (i = 0; i < SNIPPETS.length; i++) {
-      body += '<a href="#" data-snip="' + i + '">' + esc(SNIPPETS[i][0]) + '</a>';
-    }
-    body += '</div>';
-    body += '<label for="code">Code</label>';
-    body += '<textarea class="codearea" id="code" spellcheck="false" autocorrect="off" autocapitalize="off">' +
-            esc(SNIPPETS[0][1]) + '</textarea>';
-    body += '<button class="btn" type="button" id="run">Run</button>' +
-            '<button class="btn" type="button" id="clearcode">Clear</button>';
-    body += '<h2>Output</h2><pre class="out" id="out">(nothing yet)</pre>';
-    body += '<h2>Preview</h2>' +
-            '<iframe class="preview" id="preview" title="preview"></iframe>';
-    body += '<div class="box tight"><p class="small" style="margin:0">' +
-            '<b>Tip:</b> <code>return</code> sends a value back to the output box. ' +
-            '<code>document.body</code> draws in the preview. <code>console.log</code> is collected too.' +
-            '</p></div>';
-    shell('JS App', body);
-
-    var fr = document.getElementById('preview');
-    try {
-      var doc = fr.contentDocument || fr.contentWindow.document;
-      doc.open();
-      doc.write('<!DOCTYPE html><html><head><style>body{font-family:Helvetica,Arial,sans-serif;font-size:16px;margin:10px;color:#000;background:#fff}h1{font-size:20px}</style></head><body><p>Preview is empty.</p></body></html>');
-      doc.close();
-    } catch (e) {}
-
-    function joinArgs(args) {
-      var parts = [];
-      for (var k = 0; k < args.length; k++) {
-        var v = args[k];
-        if (typeof v === 'object') {
-          try { parts.push(JSON.stringify(v)); } catch (e) { parts.push(String(v)); }
-        } else { parts.push(String(v)); }
-      }
-      return parts.join(' ');
-    }
-
-    function run() {
-      var code = document.getElementById('code').value;
-      var out = document.getElementById('out');
-      var logs = [];
-      var fakeConsole = {
-        log: function () { logs.push(joinArgs(arguments)); },
-        error: function () { logs.push(joinArgs(arguments)); },
-        warn: function () { logs.push(joinArgs(arguments)); }
-      };
-      var result;
-      var err = null;
-      var fr = document.getElementById('preview');
-      var pdoc = null;
-      try {
-        pdoc = fr.contentDocument || fr.contentWindow.document;
-        pdoc.open();
-        pdoc.write('<!DOCTYPE html><html><head><style>body{font-family:Helvetica,Arial,sans-serif;font-size:16px;margin:10px;color:#000;background:#fff}h1{font-size:20px}</style></head><body></body></html>');
-        pdoc.close();
-      } catch (e) { pdoc = null; }
-
-      try {
-        var f = new Function('console', 'preview', '"use strict";\n' + code);
-        result = f(fakeConsole, pdoc);
-      } catch (e2) {
-        err = e2 && e2.message ? e2.message : String(e2);
-      }
-
-      var text = '';
-      if (logs.length) { text += logs.join('\n') + '\n'; }
-      if (err) { text += 'Error: ' + err; }
-      else if (result !== undefined) { text += String(result); }
-      if (!text) { text = '(no output)'; }
-      out.innerHTML = esc(text);
-    }
-
-    document.getElementById('run').onclick = run;
-    document.getElementById('clearcode').onclick = function () {
-      document.getElementById('code').value = '';
-      document.getElementById('out').innerHTML = '(nothing yet)';
-    };
-    var chips = document.getElementById('chips').getElementsByTagName('a');
-    for (var j = 0; j < chips.length; j++) {
-      chips[j].onclick = (function (n) {
-        return function (e) {
-          e.preventDefault();
-          document.getElementById('code').value = SNIPPETS[n][1];
-          document.getElementById('out').innerHTML = '(nothing yet)';
-          return false;
-        };
-      })(parseInt(chips[j].getAttribute('data-snip'), 10));
-    }
-  }
-
   /* ---------- boot ---------- */
 
   function render() {
@@ -1270,7 +1390,6 @@ var ROAK = (function () {
     else if (r === 'neighborhood') { pageNeighborhood(); }
     else if (r === 'pinboard') { pagePinboard(); }
     else if (r === 'topics') { pageTopics(); }
-    else if (r === 'js') { pageJs(); }
     else { pageHome(); }
   }
 
@@ -1278,8 +1397,6 @@ var ROAK = (function () {
   function renderSoft() {
     var y = 0;
     try { y = window.pageYOffset || document.documentElement.scrollTop || 0; } catch (e) {}
-    var r = route();
-    if (r === 'js') { return; }
     render();
     try { window.scrollTo(0, y); } catch (e) {}
   }
@@ -1304,7 +1421,12 @@ var ROAK = (function () {
     tree: function () { return tree; },
     list: list,
     me: me,
-    myKey: myKey,
+    signUp: signUp,
+    signIn: signIn,
+    hashPassword: hashPassword,
+    sha256Hex: sha256Hex,
+    randomSalt: randomSalt,
+    signOut: function () { setMe(''); },
     esc: esc,
     toast: toast,
     cloudOn: cloudOn
