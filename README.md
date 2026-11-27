@@ -5,15 +5,33 @@ big buttons — built to open and stay open in the Kindle Experimental Browser.
 
 Live at: **https://helloandhi12345678910-ui.github.io/ROAKSTASAWD-HQ/**
 
+> **Set up the shared backend:** see [BACKEND.md](BACKEND.md). Until a Firebase
+> Realtime Database URL is put in `js/backend.js`, the site saves on the device only.
+
 ## Apps
 
 | Page | What it does |
 |---|---|
-| `#home` | Front door, links to everything |
-| `#chat` | Short messages, newest at the bottom |
+| `#home` | Front door, links to everything, latest pins |
+| `#chat` | Short messages; last 100 shown, older ones on a button |
 | `#neighborhood` | Longer posts with optional one-word tags, likes, delete your own |
+| `#pinboard` | Pins: permanent notes, kept until you unpin them; edit your own |
 | `#topics` | One subject per thread, with replies |
 | `#js` | A JavaScript playground: write code, tap Run, read the output and a live preview |
+
+## How data is saved
+
+Everything is one shared JSON tree (`hq`) with `meta`, `chat`, `neighborhood`,
+`pins`, `topics` and `likes`.
+
+- `GET <backend>/hq.json` on every load, cached in `localStorage` so the device
+  still works with no signal.
+- Each post: `GET`, change its own piece, `PUT` the whole tree back — no post lost
+  to a stale page.
+- Pages check for changes every 20 seconds.
+- A failed write stays in the device copy and goes up on the next successful one.
+- Chat keeps the latest 300 on the server. Posts, pins, topics and replies are
+  never trimmed by the site.
 
 ## Built for e-ink
 
@@ -25,20 +43,16 @@ Live at: **https://helloandhi12345678910-ui.github.io/ROAKSTASAWD-HQ/**
 - Hash routing (`#chat`), because the Kindle browser handles fragment changes
   more reliably than history pushes.
 
-## Storage
-
-There is no server. Every post, message and topic is saved in the browser's
-`localStorage` on the device you type it on. Clearing browser data clears the posts.
-If you want a shared backend later, swap the `load`/`save` functions at the top of
-`js/app.js` for calls to one.
-
 ## Files
 
 ```
-index.html      shell page
-css/roak.css    e-ink stylesheet
-js/app.js       router, storage and all four apps
-LICENSE         CC0 1.0
+index.html            shell page
+css/roak.css          e-ink stylesheet
+js/backend.js         backend URL (fill this in)
+js/app.js             router, storage and all the apps
+database.rules.json   Firebase Realtime Database rules to paste in
+BACKEND.md            step-by-step Firebase setup
+LICENSE               CC0 1.0
 ```
 
 ## Running locally
