@@ -14,5 +14,11 @@
  */
 
 window.ROAK_BACKEND = {
-  url: 'https://fr-roak-hq-fr-default-rtdb.firebaseio.com'
+  url: 'https://fr-roak-hq-fr-default-rtdb.firebaseio.com',
+
+  /* The AI chat's helper: a small web service that takes
+       POST { "question": "...", "history": [...], "user": "name" }
+     and answers { "answer": "..." }.
+     Until an address is filled in, the AI Chat page says the AI is not set up. */
+  ai: ''
 };
