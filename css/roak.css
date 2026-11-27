@@ -96,6 +96,36 @@ body {
   background: #ffffff;
 }
 
+/* The x in the corner: back to the HQ screen, on every app page */
+.closer {
+  position: fixed;
+  top: 6px;
+  right: 8px;
+  z-index: 30;
+  display: block;
+  width: 44px;
+  height: 44px;
+  line-height: 40px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: bold;
+  color: #000000;
+  text-decoration: none;
+  background: #ffffff;
+  border: 2px solid #000000;
+}
+.closer:active {
+  background: #000000;
+  color: #ffffff;
+}
+/* the sign-out / sign-in in the title bar steps left so the x never sits on it */
+.bar {
+  padding-right: 62px;
+}
+.page-home .closer {
+  display: none;
+}
+
 /* Favourites bar: your starred apps, on every page */
 .favbar {
   border-bottom: 2px solid #000000;
