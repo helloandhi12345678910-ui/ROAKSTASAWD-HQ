@@ -122,3 +122,9 @@ page around it stays put, so the message box or the reply box is always on scree
 height is measured from the device's own screen when the page draws (and on resize), with a
 CSS fallback for browsers that cannot measure; on a Kindle that means no long page scroll to
 reach the keyboard. The home page, the pinboard and the neighborhood still scroll normally.
+
+## Getting around
+
+The HQ screen is not a tab in the list any more: it is the launch screen, and every app
+page carries an **&times;** in the top-right corner that goes back to it. The favourites bar
+under the title holds the apps you starred, so the list itself stays short.
