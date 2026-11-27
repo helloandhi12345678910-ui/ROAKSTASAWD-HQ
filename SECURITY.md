@@ -34,6 +34,19 @@ The worst case is: **someone finds it, spams it, or erases the posts.** That is
 annoying, not dangerous — but it means nothing private goes on the board, and the
 posts are not safe from a determined vandal.
 
+## The name check the rules do
+
+`database.rules.json` only lets through requests made to a URL whose name is
+`fr-roak-hq-fr`:
+
+```
+".read": "auth == null && $room === 'fr-roak-hq-fr'"
+```
+
+That stops someone pointing a different project name at the same rules, but it is
+not a password: the name is in the public page source, so anyone who reads it can
+send the same request. Treat it as a lock on the right door, not a key.
+
 ## Three ways to fix it, cheapest first
 
 **1. A shared password (10 minutes, still free).**
