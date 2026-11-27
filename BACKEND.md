@@ -46,6 +46,12 @@ In the Realtime Database page, open the **Rules** tab, delete what is there, and
 paste the contents of [`database.rules.json`](database.rules.json) from this repo.
 Press **Publish**.
 
+**If the Data tab says "Permission denied", this is the step that fixes it.**
+The rules in the repo name the database (`fr-roak-hq-fr`) and only allow that
+name, so the rules must be pasted **exactly as they are** — editing the name in
+one place without the other locks the site out. If you rename the database later,
+change the name in `database.rules.json` and in `js/backend.js` together.
+
 What those rules do:
 
 - Anyone can read and write — the site has no accounts, and the Kindle cannot do
