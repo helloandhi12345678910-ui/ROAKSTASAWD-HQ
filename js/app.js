@@ -52,7 +52,9 @@ var ROAK = (function () {
       neighborhood: [],
       topics: [],
       pins: [],
-      likes: []
+      likes: [],
+      ai: { msgs: [] },
+      dm: {}
     };
   }
 
@@ -68,6 +70,7 @@ var ROAK = (function () {
     if (!d.likes) { d.likes = b.likes; }
     if (!d.ai || typeof d.ai !== 'object' || !d.ai.msgs) { d.ai = { msgs: [] }; }
     d.ai.msgs = list(d.ai.msgs);
+    if (!d.dm || typeof d.dm !== 'object') { d.dm = {}; }
     return d;
   }
 
@@ -264,7 +267,7 @@ var ROAK = (function () {
 
   function fastRoute() {
     var r = route();
-    return r === 'chat' || r === 'home' || r === 'ai';
+    return r === 'chat' || r === 'home' || r === 'ai' || r === 'dm';
   }
 
   function refresh() {
@@ -280,7 +283,7 @@ var ROAK = (function () {
       }
       if (!changed) { return; }
       var r = route();
-      if (r === 'chat') { softChat(); }
+      if (r === 'chat' || r === 'dm') { softChat(); }
       else if (r === 'ai') { softAi(); }
       else if (r === 'code') { return; }   /* never redraw under someone typing code */
       else { renderSoft(); }
@@ -916,6 +919,7 @@ var ROAK = (function () {
             : 'no backend set yet &mdash; posts stay on this device.') +
         '</footer>' +
       '</div>' +
+      '<div id="picker" class="overlay" style="display:none"></div>' +
       '<div id="signin" class="overlay" style="display:none"><div class="wrap" style="padding-top:0" id="signinbody"></div></div>' +
       '<div id="toast"></div>';
 
@@ -1234,12 +1238,26 @@ var ROAK = (function () {
     for (var j = 0; j < NAV.length; j++) { wirePick(NAV[j][0]); }
   }
 
+  /* Chat has two rooms: the global chat everyone shares, and direct messages. */
   function pageChat() {
+    var id = qs('id');
+    var tab = id ? 'dm' : (qs('tab') === 'dm' ? 'dm' : 'global');
+
+    var head = '<div class="subtabs">' +
+      '<a href="#chat" class="subtab' + (tab === 'global' ? ' on' : '') + '">Global chat</a>' +
+      '<a href="#chat?tab=dm" class="subtab' + (tab === 'dm' ? ' on' : '') + '">Direct messages' +
+        (dmMine().length ? '<span class="tag">' + dmMine().length + '</span>' : '') + '</a>' +
+      '<a class="plus" href="#" id="chatplus" title="New direct message">+</a>' +
+    '</div>';
+
+    if (tab === 'dm') { pageDm(id, head); return; }
+
     var all = list(tree.chat);
     var shown = chatShown();
     var shownCount = Math.min(shown, all.length);
     var body = '';
 
+    body += head;
     body += statusBox();
     body += nameBox();
     body += '<p class="small dim" id="chatcount">' + all.length + ' message' + (all.length === 1 ? '' : 's') +
@@ -1256,6 +1274,7 @@ var ROAK = (function () {
 
     shell('Chat', body);
     wireStart();
+    wirePlus('global');
     scrollChatToEnd();
 
     var more = document.getElementById('chatmore');
@@ -1283,6 +1302,148 @@ var ROAK = (function () {
         refresh();
         if (!ok) { toast('Saved on this device — will send when back online'); }
       });
+      return false;
+    };
+  }
+
+  /* One conversation, or the list of them when no id is given. */
+  function pageDm(id, head) {
+    var body = head;
+    body += statusBox();
+    body += nameBox();
+
+    if (!signedIn()) {
+      body += '<div class="empty"><b>Direct messages are for members.</b><br>' +
+        '<span class="small">Sign in to see yours.</span></div>';
+      shell('Chat', body);
+      wireStart();
+      wirePlus('dm');
+      return;
+    }
+
+    if (!id) {
+      var mine = dmMine();
+      body += '<p class="small dim">Your conversations, kept from visit to visit. ' +
+              'Tap <b>+</b> to start a new one.</p>';
+      if (!mine.length) {
+        body += '<div class="empty"><b>No direct messages yet.</b><br>' +
+          '<span class="small">Tap + to pick someone.</span></div>';
+      }
+      for (var i = 0; i < mine.length; i++) {
+        var m = mine[i];
+        var unread = dmUnread(m.id);
+        body += '<a class="topic" href="#dm?id=' + encodeURIComponent(m.id) + '">' +
+          '<span class="t">' + esc(m.other) + (unread ? ' <span class="tag">' + unread + '</span>' : '') + '</span>' +
+          '<span class="m">' + esc(String(m.preview).slice(0, 60)) + ' &middot; ' + when(m.at) + '</span></a>';
+      }
+      body += '<a class="btn wide" href="#" id="dmnew">+ New direct message</a>';
+      shell('Direct messages', body);
+      wireStart();
+      wirePlus('dm');
+      var nb = document.getElementById('dmnew');
+      if (nb) { nb.onclick = function (e) { e.preventDefault(); openPicker('dm'); return false; }; }
+      return;
+    }
+
+    /* one conversation */
+    var thread = dmThread(id);
+    if (!thread) {
+      body += '<div class="empty"><b>No conversation here yet.</b><br>' +
+        '<span class="small">Pick someone with + to start one.</span></div>' +
+        '<a class="btn" href="#chat?tab=dm">Back to direct messages</a>';
+      shell('Direct messages', body);
+      wireStart();
+      wirePlus('dm');
+      return;
+    }
+
+    var bits = id.split('~');
+    var mineKey = nameKey(me());
+    if (bits[0] !== mineKey && bits[1] !== mineKey) {
+      body += '<div class="empty"><b>That is not one of your conversations.</b><br>' +
+        '<a class="btn" href="#chat?tab=dm">Back to direct messages</a></div>';
+      shell('Direct messages', body);
+      wireStart();
+      wirePlus('dm');
+      return;
+    }
+    var otherKey = bits[0] === mineKey ? bits[1] : bits[0];
+    var otherName = (thread.names && thread.names[otherKey]) ? thread.names[otherKey] : otherKey;
+    var msgs = dmMsgs(id);
+
+    body += '<p class="small"><a href="#chat?tab=dm">&larr; All direct messages</a></p>';
+    body += '<div class="box tight"><b>With ' + esc(otherName) + '</b><br>' +
+            '<span class="small dim">' + msgs.length + ' message' + (msgs.length === 1 ? '' : 's') +
+            ' &middot; kept from visit to visit</span></div>';
+    body += '<div class="chatlog" id="dmlog">' + dmLogHtml(id) + '</div>';
+    body += '<div class="chatform"><form id="dmform" action="#dm?id=' + encodeURIComponent(id) + '">' +
+      '<label for="dmtext">Message</label>' +
+      '<textarea id="dmtext" maxlength="500"></textarea>' +
+      '<button class="btn wide" type="submit">Send</button>' +
+    '</form></div>';
+
+    shell('Direct messages', body);
+    wireStart();
+    wirePlus('dm');
+    dmSeen(id);
+    scrollChatToEnd();
+
+    document.getElementById('dmform').onsubmit = function (e) {
+      e.preventDefault();
+      var txt = trim(document.getElementById('dmtext').value);
+      if (!txt) { toast('Type a message'); return false; }
+      document.getElementById('dmtext').value = '';
+      var msg = { id: newId('d'), by: me(), text: txt, at: (new Date()).getTime() };
+      var store = dmStore();
+      if (!store[id]) { store[id] = { names: {} }; }
+      store[id].msgs = list(store[id].msgs).concat([msg]);
+      if (!store[id].names) { store[id].names = {}; }
+      store[id].names[mineKey] = me();
+      store[id].names[otherKey] = otherName;
+      var log = document.getElementById('dmlog');
+      if (log) {
+        if (log.getElementsByClassName('empty').length) { log.innerHTML = ''; }
+        log.innerHTML += '<div class="msg me"><span class="who">' + esc(msg.by) +
+          '</span><span class="when">just now</span><div class="text">' + esc(msg.text) + '</div></div>';
+        scrollChatToEnd();
+      }
+      var mineMsgs = list(store[id].msgs);
+      var names = store[id].names;
+      change(function (d) {
+        if (!d.dm) { d.dm = {}; }
+        d.dm[id] = { names: names, msgs: mineMsgs };
+      }, function (ok) {
+        dmSeen(id);
+        if (!ok) { toast('Saved on this device — will send when back online'); }
+      });
+      return false;
+    };
+  }
+
+  function dmLogHtml(id) {
+    var msgs = dmMsgs(id);
+    if (!msgs.length) {
+      return '<div class="empty"><b>Nothing said yet.</b><br>' +
+        '<span class="small">Write the first message.</span></div>';
+    }
+    var h = '';
+    for (var i = 0; i < msgs.length; i++) {
+      h += '<div class="msg' + (msgs[i].by === me() ? ' me' : '') + '">' +
+        '<span class="who">' + esc(msgs[i].by) + '</span>' +
+        '<span class="when">' + when(msgs[i].at) + '</span>' +
+        '<div class="text">' + esc(msgs[i].text) + '</div>' +
+      '</div>';
+    }
+    return h;
+  }
+
+  /* the + in the chat header: a new conversation, or a new topic */
+  function wirePlus(mode) {
+    var plus = document.getElementById('chatplus');
+    if (!plus) { return; }
+    plus.onclick = function (e) {
+      e.preventDefault();
+      openPicker('dm');
       return false;
     };
   }
@@ -1339,6 +1500,21 @@ var ROAK = (function () {
 
   /* redraw the chat without touching the box you may be typing in */
   function softChat() {
+    var dlog = document.getElementById('dmlog');
+    if (dlog) {
+      var did = qs('id');
+      var atEnd2 = (dlog.scrollHeight - dlog.scrollTop - dlog.clientHeight) < 40;
+      var h2 = dmLogHtml(did);
+      if (dlog.innerHTML !== h2) {
+        dlog.innerHTML = h2;
+        if (atEnd2) { scrollChatToEnd(); }
+        dmSeen(did);
+      }
+      var st2 = document.getElementById('live');
+      if (st2) { st2.innerHTML = stampLine(); }
+      stickBar();
+      return;
+    }
     var log = document.getElementById('chatlog');
     if (!log) { render(); return; }
     var atEnd = (log.scrollHeight - log.scrollTop - log.clientHeight) < 40;
@@ -1588,8 +1764,16 @@ var ROAK = (function () {
         '<textarea id="replytext" maxlength="2000"></textarea>' +
         '<button class="btn wide" type="submit">Post reply</button>' +
       '</form>';
+      body = '<div class="subtabs">' +
+        '<a class="subtab" href="#topics">All topics</a>' +
+        '<a class="plus" href="#" id="topicplus" title="New topic">+</a>' +
+      '</div>' + body;
       shell(t.title, body);
       wireStart();
+      var tp2 = document.getElementById('topicplus');
+      if (tp2) {
+        tp2.onclick = function (e) { e.preventDefault(); openPicker('topic'); return false; };
+      }
 
       document.getElementById('replyform').onsubmit = function (e) {
         e.preventDefault();
@@ -1615,16 +1799,14 @@ var ROAK = (function () {
       return;
     }
 
+    body += '<div class="subtabs">' +
+      '<span class="subtab on">All topics</span>' +
+      '<a class="plus" href="#" id="topicplus" title="New topic">+</a>' +
+    '</div>';
     body += statusBox();
     body += nameBox();
-    body += '<p class="small dim">One subject per thread. Every topic and reply is kept.</p>';
-    body += '<form id="topicform" action="#topics">' +
-      '<label for="topictitle">Topic title</label>' +
-      '<input type="text" id="topictitle" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="off">' +
-      '<label for="topictext">First post</label>' +
-      '<textarea id="topictext" maxlength="2000"></textarea>' +
-      '<button class="btn wide" type="submit">Start topic</button>' +
-    '</form>';
+    body += '<p class="small dim">One subject per thread. Every topic and reply is kept. ' +
+            'Tap <b>+</b> to start one.</p>';
 
     body += '<h2>All topics</h2>';
     var topics = list(tree.topics).reverse();
@@ -1643,31 +1825,248 @@ var ROAK = (function () {
     shell('Topics', body);
     wireStart();
 
-    document.getElementById('topicform').onsubmit = function (e) {
-      e.preventDefault();
-      if (!needName()) { return false; }
-      var title = trim(document.getElementById('topictitle').value);
-      var txt = trim(document.getElementById('topictext').value);
-      if (!title) { toast('Give the topic a title'); return false; }
-      if (!txt) { toast('Write the first post'); return false; }
-      var nid = newId('t');
-      var now = (new Date()).getTime();
-      change(function (d) {
-        var ts = list(d.topics);
-        ts.push({
-          id: nid,
-          title: title,
-          by: me(),
-          at: now,
-          replies: [{ id: newId('r'), by: me(), text: txt, at: now }]
-        });
-        d.topics = ts;
-      }, function () {
-        window.location.hash = 'topics?id=' + encodeURIComponent(nid);
-        render();
+    var tp = document.getElementById('topicplus');
+    if (tp) {
+      tp.onclick = function (e) {
+        e.preventDefault();
+        openPicker('topic');
+        return false;
+      };
+    }
+  }
+
+  /* ---------- direct messages ----------
+     A conversation lives in the shared document under dm[convId], where the id is
+     made from the two names sorted, so both people land in the same place and the
+     list of your conversations is built from your own name. */
+
+  function dmIdFor(a, b) {
+    var ka = nameKey(a);
+    var kb = nameKey(b);
+    if (!ka || !kb || ka === kb) { return ''; }
+    return ka < kb ? ka + '~' + kb : kb + '~' + ka;
+  }
+
+  function dmStore() {
+    if (!tree.dm || typeof tree.dm !== 'object') { tree.dm = {}; }
+    return tree.dm;
+  }
+
+  function dmThread(id) {
+    if (!id) { return null; }
+    var all = dmStore();
+    return all[id] ? all[id] : null;
+  }
+
+  function dmMsgs(id) {
+    var t = dmThread(id);
+    return t ? list(t.msgs) : [];
+  }
+
+  /* every conversation the signed-in person is part of, newest first */
+  function dmMine() {
+    var who = me();
+    if (!who) { return []; }
+    var key = nameKey(who);
+    var all = dmStore();
+    var out = [];
+    for (var id in all) {
+      if (!all.hasOwnProperty(id)) { continue; }
+      var bits = id.split('~');
+      if (bits.length !== 2) { continue; }
+      if (bits[0] !== key && bits[1] !== key) { continue; }
+      var otherKey = bits[0] === key ? bits[1] : bits[0];
+      var msgs = list(all[id].msgs);
+      var last = msgs.length ? msgs[msgs.length - 1] : null;
+      out.push({
+        id: id,
+        other: (all[id].names && all[id].names[otherKey]) ? all[id].names[otherKey] : otherKey,
+        at: last ? last.at : 0,
+        preview: last ? last.text : '',
+        count: msgs.length
       });
+    }
+    out.sort(function (x, y) { return (y.at || 0) - (x.at || 0); });
+    return out;
+  }
+
+  function dmUnread(id) {
+    var seen = 0;
+    try { seen = parseInt(window.localStorage.getItem('roak.seen.' + id), 10) || 0; } catch (e) { seen = 0; }
+    var msgs = dmMsgs(id);
+    var n = 0;
+    for (var i = 0; i < msgs.length; i++) {
+      if (msgs[i].at > seen && msgs[i].by !== me()) { n++; }
+    }
+    return n;
+  }
+
+  function dmSeen(id) {
+    var msgs = dmMsgs(id);
+    var last = msgs.length ? msgs[msgs.length - 1].at : 0;
+    try { window.localStorage.setItem('roak.seen.' + id, String(last)); } catch (e) {}
+  }
+
+  /* the account record whose name matches a typed name, or null */
+  function accountNamed(name) {
+    var key = nameKey(name);
+    var accounts = list(tree.accounts);
+    for (var i = 0; i < accounts.length; i++) {
+      if (nameKey(accounts[i].name) === key) { return accounts[i]; }
+    }
+    return null;
+  }
+
+  function dmOpen(name) {
+    var id = dmIdFor(me(), name);
+    if (!id) { return; }
+    window.location.hash = 'dm?id=' + encodeURIComponent(id);
+    render();
+  }
+
+  /* ---------- the people picker (the + button) ---------- */
+
+  var pickerMode = 'dm';
+
+  function openPicker(mode) {
+    pickerMode = mode || 'dm';
+    var el = document.getElementById('picker');
+    if (!el) { return; }
+    var body = '';
+    if (pickerMode === 'dm') {
+      body += '<h2>New direct message</h2>' +
+        '<p class="small dim">Pick someone. The conversation is kept, so it is still there ' +
+        'the next time you open this page.</p>';
+      if (!signedIn()) {
+        body += '<div class="box tight"><b>Sign in first.</b><br>' +
+          '<span class="small">Direct messages are between accounts.</span><br>' +
+          '<a class="btn" href="#" id="pickin">Sign in</a> ' +
+          '<a class="btn" href="#" id="pickup">Make an account</a></div>';
+      } else {
+        var accounts = list(tree.accounts);
+        var who = nameKey(me());
+        var any = false;
+        for (var i = 0; i < accounts.length; i++) {
+          if (nameKey(accounts[i].name) === who) { continue; }
+          any = true;
+          var cid = dmIdFor(me(), accounts[i].name);
+          body += '<a class="pick" href="#" data-dm="' + esc(accounts[i].name) + '">' +
+            '<span class="star">&#9993;</span>' +
+            '<span class="nm">' + esc(accounts[i].name) + '</span>' +
+            '<span class="st">' + (dmThread(cid) ? 'conversation started' : 'start a conversation') + '</span>' +
+          '</a>';
+        }
+        if (!any) {
+          body += '<div class="empty"><b>Nobody else here yet.</b><br>' +
+            '<span class="small">When another account exists, they show up here.</span></div>';
+        }
+        body += '<label for="dmname">Or type a name</label>' +
+          '<input type="text" id="dmname" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off">' +
+          '<button class="btn wide" type="button" id="dmgo">Open the conversation</button>' +
+          '<p class="small dim" id="dmnote"></p>';
+      }
+    } else {
+      body += '<h2>New topic</h2>' +
+        '<p class="small dim">One subject per thread. Every topic and reply is kept.</p>';
+      if (!signedIn()) {
+        body += '<div class="box tight"><b>Sign in first.</b><br>' +
+          '<span class="small">A topic needs a name behind it.</span><br>' +
+          '<a class="btn" href="#" id="pickin">Sign in</a> ' +
+          '<a class="btn" href="#" id="pickup">Make an account</a></div>';
+      } else {
+        body += '<form id="newtopic" action="#topics">' +
+          '<label for="topictitle">Topic title</label>' +
+          '<input type="text" id="topictitle" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="off">' +
+          '<label for="topictext">First post</label>' +
+          '<textarea id="topictext" maxlength="2000"></textarea>' +
+          '<button class="btn wide" type="submit">Start topic</button>' +
+        '</form>';
+      }
+    }
+    body += '<a class="btn wide" href="#" id="pickclose">Cancel</a>';
+
+    el.innerHTML = '<div class="sheet">' + body + '</div>';
+    el.style.display = 'block';
+
+    document.getElementById('pickclose').onclick = function (e) {
+      e.preventDefault();
+      closePicker();
       return false;
     };
+    var pin = document.getElementById('pickin');
+    if (pin) { pin.onclick = function (e) { e.preventDefault(); closePicker(); openSignin('in'); return false; }; }
+    var pup = document.getElementById('pickup');
+    if (pup) { pup.onclick = function (e) { e.preventDefault(); closePicker(); openSignin('up'); return false; }; }
+
+    var picks = el.getElementsByTagName('a');
+    for (var p = 0; p < picks.length; p++) {
+      if (!picks[p].getAttribute || !picks[p].getAttribute('data-dm')) { continue; }
+      picks[p].onclick = function (e) {
+        e.preventDefault();
+        var nm = this.getAttribute('data-dm');
+        closePicker();
+        dmOpen(nm);
+        return false;
+      };
+    }
+
+    var go = document.getElementById('dmgo');
+    if (go) {
+      go.onclick = function () {
+        var nm = cleanName(document.getElementById('dmname').value);
+        var note = document.getElementById('dmnote');
+        if (!nm) { if (note) { note.innerHTML = 'Type a name.'; } return; }
+        var acc = accountNamed(nm);
+        if (!acc) {
+          if (note) { note.innerHTML = 'No account called "' + esc(nm) + '" yet. Names must match exactly.'; }
+          return;
+        }
+        closePicker();
+        dmOpen(acc.name);
+      };
+    }
+
+    var nt = document.getElementById('newtopic');
+    if (nt) {
+      nt.onsubmit = function (e) {
+        e.preventDefault();
+        startTopic(document.getElementById('topictitle').value, document.getElementById('topictext').value);
+        return false;
+      };
+    }
+  }
+
+  function closePicker() {
+    var el = document.getElementById('picker');
+    if (!el) { return; }
+    el.style.display = 'none';
+    el.innerHTML = '';
+  }
+
+  function startTopic(titleRaw, textRaw) {
+    if (!needName()) { return false; }
+    var title = trim(titleRaw);
+    var txt = trim(textRaw);
+    if (!title) { toast('Give the topic a title'); return false; }
+    if (!txt) { toast('Write the first post'); return false; }
+    var nid = newId('t');
+    var now = (new Date()).getTime();
+    closePicker();
+    change(function (d) {
+      var ts = list(d.topics);
+      ts.push({
+        id: nid,
+        title: title,
+        by: me(),
+        at: now,
+        replies: [{ id: newId('r'), by: me(), text: txt, at: now }]
+      });
+      d.topics = ts;
+    }, function () {
+      window.location.hash = 'topics?id=' + encodeURIComponent(nid);
+      render();
+    });
+    return false;
   }
 
   /* ----- AI chat ----- */
@@ -2162,6 +2561,7 @@ var ROAK = (function () {
     var r = route();
     isAi = (r === 'ai');
     closeSignin();
+    closePicker();
     if (r === 'chat') { pageChat(); }
     else if (r === 'neighborhood') { pageNeighborhood(); }
     else if (r === 'pinboard') { pagePinboard(); }
@@ -2169,6 +2569,7 @@ var ROAK = (function () {
     else if (r === 'ai') { pageAi(); }
     else if (r === 'code') { pageCode(); }
     else if (r === 'favorites') { pageFavorites(); }
+    else if (r === 'dm') { pageDm(qs('id'), ''); }
     else { pageHome(); }
   }
 
