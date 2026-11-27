@@ -816,7 +816,6 @@ var ROAK = (function () {
   /* ---------- shell ---------- */
 
   var NAV = [
-    ['home', 'HQ'],
     ['chat', 'Chat'],
     ['neighborhood', 'Neighborhood'],
     ['pinboard', 'Pinboard'],
@@ -948,6 +947,7 @@ var ROAK = (function () {
       '</div>' +
       favBar(r) + '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div class="nav">' + nav + '</div>' +
+      (r === 'home' ? '' : '<a class="closer" href="#home" id="tocloser" title="Back to the HQ">&#10005;</a>') +
       '<div class="wrap page-' + esc(r) + '">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
         '<h1>' + esc(title) + '</h1>' +
@@ -968,6 +968,16 @@ var ROAK = (function () {
     stickBar();
     fitRoom();
 
+    var cl = document.getElementById('tocloser');
+    if (cl) {
+      cl.onclick = function (e) {
+        e.preventDefault();
+        closePicker();
+        window.location.hash = 'home';
+        render();
+        return false;
+      };
+    }
     var sib = document.getElementById('signinbtn');
     if (sib) { sib.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
     var sw = document.getElementById('switchname');
@@ -1252,7 +1262,8 @@ var ROAK = (function () {
     var mine = favs();
     var body = '';
     body += '<p class="small dim">Star an app and it sits in the top bar on every page, ' +
-            'so you never have to go back to the HQ to reach it. Six at most.</p>';
+            'so it is one tap away from anywhere. The <b>&times;</b> in the corner goes back to ' +
+            'the HQ screen. Six at most.</p>';
     for (var i = 0; i < NAV.length; i++) {
       var k = NAV[i][0];
       var on = indexIn(mine, k) >= 0;
