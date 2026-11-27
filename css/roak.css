@@ -87,6 +87,15 @@ body {
   border-color: #ffffff;
 }
 
+/* The favourites bar stays at the top of the screen while you scroll */
+.favstick {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #ffffff;
+}
+
 /* Favourites bar: your starred apps, on every page */
 .favbar {
   border-bottom: 2px solid #000000;
@@ -400,7 +409,12 @@ select:focus {
 /* Home: the apps as a grid of tiles, two across */
 .tiles {
   margin: 0 -5px 8px -5px;
-  overflow: hidden;
+  overflow: visible;
+}
+.tiles:after {
+  content: "";
+  display: block;
+  clear: both;
 }
 .tile {
   float: left;
@@ -410,6 +424,7 @@ select:focus {
   padding: 0 5px;
   margin-bottom: 10px;
   position: relative;
+  min-height: 106px;
 }
 .tilego {
   display: block;
