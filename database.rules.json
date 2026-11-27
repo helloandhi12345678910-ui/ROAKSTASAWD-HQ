@@ -1,9 +1,8 @@
 {
   "rules": {
     "hq": {
-      /* Must match the URL in js/backend.js; change both together. */
-      ".read": "auth == null && $room === 'fr-roak-hq-fr'",
-      ".write": "auth == null && $room === 'fr-roak-hq-fr'",
+      ".read": true,
+      ".write": true,
       ".validate": "newData.hasChildren(['meta', 'chat', 'neighborhood', 'topics', 'pins', 'likes'])",
 
       "meta": {
