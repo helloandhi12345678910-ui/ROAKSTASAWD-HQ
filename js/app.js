@@ -36,6 +36,50 @@ var ROAK = (function () {
     return backend() !== null;
   }
 
+  /* A Cloudflare Worker address ends in /api: everything then goes through one
+     POST, and the Worker checks who is asking. The old Firebase address is a
+     plain Realtime Database: one document, read and written as JSON. */
+  function workerOn() {
+    var b = backend();
+    return !!(b && b.url.replace(/\/+$/, '').slice(-4) === '/api');
+  }
+
+  function apiUrl() {
+    return backend().url.replace(/\/+$/, '');
+  }
+
+  function tokenGet() {
+    try { return window.localStorage.getItem('roak.token') || ''; } catch (e) { return ''; }
+  }
+
+  function tokenSet(t) {
+    try {
+      if (t) { window.localStorage.setItem('roak.token', t); }
+      else { window.localStorage.removeItem('roak.token'); }
+    } catch (e) {}
+  }
+
+  /* One call to the Worker. cb(ok, data) */
+  function apiCall(action, payload, cb) {
+    var req = new XMLHttpRequest();
+    req.open('POST', apiUrl(), true);
+    try { req.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
+    var t = tokenGet();
+    if (t) { try { req.setRequestHeader('Authorization', 'Bearer ' + t); } catch (e) {} }
+    req.onreadystatechange = function () {
+      if (req.readyState !== 4) { return; }
+      var d = null;
+      try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
+      if (req.status >= 200 && req.status < 300 && d && !d.error) {
+        if (cb) { cb(true, d); }
+        return;
+      }
+      if (cb) { cb(false, d || { error: req.status === 0 ? 'No connection' : 'Server said ' + req.status }); }
+    };
+    try { req.send(JSON.stringify({ action: action, payload: payload || {} })); }
+    catch (e) { if (cb) { cb(false, { error: 'No connection' }); } }
+  }
+
   function rootUrl() {
     var u = backend().url;
     if (u.charAt(u.length - 1) !== '/') { u += '/'; }
@@ -172,6 +216,28 @@ var ROAK = (function () {
 
     if (state !== 'ready') { state = 'loading'; }
 
+    if (workerOn()) {
+      apiCall('state', {}, function (ok, d) {
+        if (ok && d && d.state) {
+          rooms.hq = d.state;
+          var moved = mergeRoom('hq', d.state);
+          state = 'ready';
+          lastError = '';
+          if (cb) { cb(moved); }
+          return;
+        }
+        if (d && d.error === 'signin' && tokenGet()) {
+          /* the session is over (signed out, banned, or signed in elsewhere) */
+          tokenSet('');
+          setMe('');
+        }
+        state = cached ? 'ready' : 'offline';
+        lastError = (d && d.error) || 'No connection';
+        if (cb) { cb(false); }
+      });
+      return;
+    }
+
     var names = isAi ? NODES : ['hq'];
     var left = names.length;
     var changed = false;
@@ -261,6 +327,12 @@ var ROAK = (function () {
 
       if (!cloudOn()) {
         state = 'ready';
+        if (cb) { cb(true); }
+        return;
+      }
+
+      if (workerOn()) {
+        /* the server is the truth: read it back after the edit has been sent */
         if (cb) { cb(true); }
         return;
       }
@@ -462,6 +534,13 @@ var ROAK = (function () {
   }
 
   function setNotice(kind, text, done) {
+    if (workerOn()) {
+      apiCall('admin.notice', { text: text }, function (ok, d) {
+        if (!ok) { toast((d && d.error) || 'Could not save the notice'); }
+        if (done) { done(); }
+      });
+      return;
+    }
     var now = (new Date()).getTime();
     change(function (d) {
       var n = list(d.notices);
@@ -771,6 +850,18 @@ var ROAK = (function () {
   function signUp(name, password, password2, done) {
     name = cleanName(name);
     if (!name) { done('Type a name.'); return; }
+    if (workerOn()) {
+      if (!password || !password2) { done('Type your password twice.'); return; }
+      if (password !== password2) { done('The two passwords are different.'); return; }
+      if (password.length < 6) { done('The password needs 6 letters or more.'); return; }
+      apiCall('signup', { name: name, password: password }, function (ok, d) {
+        if (!ok) { done((d && d.error) || 'Could not sign up.'); return; }
+        tokenSet(d.token);
+        setMe(d.name);
+        done(null);
+      });
+      return;
+    }
     if (name.length > 20) { done('Keep the name to 20 letters.'); return; }
     if (nameKey(name).length < 2) { done('Use at least 2 letters or numbers.'); return; }
     var prob = passwordProblem(password);
@@ -793,6 +884,15 @@ var ROAK = (function () {
     name = cleanName(name);
     if (!name) { done('Type your name.'); return; }
     if (!password) { done('Type your password.'); return; }
+    if (workerOn()) {
+      apiCall('signin', { name: name, password: password }, function (ok, d) {
+        if (!ok) { done((d && d.error) || 'Could not sign in.'); return; }
+        tokenSet(d.token);
+        setMe(d.name);
+        done(null);
+      });
+      return;
+    }
     pull(function () {
       var acc = findAccount(name);
       if (!acc) { done('No account called "' + name + '".'); return; }
@@ -817,6 +917,31 @@ var ROAK = (function () {
         done(null);
       });
     });
+  }
+
+  /* Send one post to the Worker. Through Cloudflare the server decides what is
+     allowed, so the page only sends and then re-reads. Returns true when the
+     request was handed to the Worker, false when the old path should run. */
+  function sendPost(kind, text, thread, title, tag, cb) {
+    if (!workerOn()) { return false; }
+    apiCall('post', { kind: kind, text: text, thread: thread || '',
+      title: title || '', tag: tag || '' }, function (ok, d) {
+      if (!ok) {
+        toast((d && d.error) || 'Could not send');
+      }
+      if (cb) { cb(ok, d); }
+    });
+    return true;
+  }
+
+  /* Ask the Worker to act (delete, like, admin powers). */
+  function askServer(action, payload, cb) {
+    if (!workerOn()) { return false; }
+    apiCall(action, payload, function (ok, d) {
+      if (!ok) { toast((d && d.error) || 'That did not work'); }
+      if (cb) { cb(ok, d); }
+    });
+    return true;
   }
 
   /* ---------- text ---------- */
@@ -1026,6 +1151,10 @@ var ROAK = (function () {
     if (sw) {
       sw.onclick = function (e) {
         e.preventDefault();
+        /* through the Worker the session is ended on the server too, so the
+           token cannot be used from anywhere afterwards */
+        if (workerOn()) { apiCall('signout', {}, function () {}); }
+        tokenSet('');
         setMe('');
         closeSignin();
         render();
@@ -1393,6 +1522,7 @@ var ROAK = (function () {
           '</span><span class="when">just now</span><div class="text">' + esc(msg.text) + '</div></div>';
         scrollChatToEnd();
       }
+      if (sendPost('chat', t, '', '', '', function () { refresh(); })) { return false; }
       change(function (d) {
         d.chat = list(d.chat).concat([msg]);
       }, function (ok) {
@@ -1509,6 +1639,10 @@ var ROAK = (function () {
       }
       var mineMsgs = list(store[id].msgs);
       var names = store[id].names;
+      if (sendPost('dm', txt, id, '', '', function (ok) {
+        dmSeen(id);
+        if (ok) { refresh(); }
+      })) { return false; }
       change(function (d) {
         if (!d.dm) { d.dm = {}; }
         d.dm[id] = { names: names, msgs: mineMsgs };
@@ -1688,6 +1822,9 @@ var ROAK = (function () {
       var t = trim(document.getElementById('posttext').value);
       if (!t) { toast('Write something first'); return false; }
       var tag = trim(document.getElementById('posttag').value).replace(/[^A-Za-z0-9]/g, '');
+      if (sendPost('post', t, '', '', tag, function (ok) {
+        if (ok) { render(); toast('Posted'); }
+      })) { return false; }
       change(function (d) {
         d.neighborhood.push({ id: newId('n'), by: me(), text: t, tag: tag, at: (new Date()).getTime() });
       }, function (ok) {
@@ -1698,6 +1835,7 @@ var ROAK = (function () {
     };
 
     wireListActions('data-like', function (id) {
+      if (askServer('like', { id: id }, function () { render(); })) { return; }
       change(function (d) {
         var ls = list(d.likes);
         var keep = [];
@@ -1712,6 +1850,7 @@ var ROAK = (function () {
     });
 
     wireListActions('data-del', function (id) {
+      if (askServer('delete', { id: id }, function () { render(); toast('Deleted'); })) { return; }
       change(function (d) {
         var src = list(d.neighborhood);
         var keep = [];
@@ -1798,6 +1937,22 @@ var ROAK = (function () {
       var t = trim(document.getElementById('pintext').value);
       if (!t) { toast('Write the pin first'); return false; }
       var now = (new Date()).getTime();
+      if (workerOn()) {
+        if (editing) {
+          askServer('delete', { id: editing.id }, function () {
+            sendPost('pin', t, '', '', '', function () {
+              window.location.hash = 'pinboard';
+              render();
+              toast('Pin saved');
+            });
+          });
+        } else {
+          sendPost('pin', t, '', '', '', function (ok) {
+            if (ok) { render(); toast('Pinned'); }
+          });
+        }
+        return false;
+      }
       change(function (d) {
         if (editing) {
           var ps = list(d.pins);
@@ -1817,6 +1972,7 @@ var ROAK = (function () {
     };
 
     wireListActions('data-unpin', function (id) {
+      if (askServer('delete', { id: id }, function () { render(); toast('Unpinned'); })) { return; }
       change(function (d) {
         var ps = list(d.pins);
         var keep = [];
@@ -1886,6 +2042,9 @@ var ROAK = (function () {
         if (!needName()) { return false; }
         var txt = trim(document.getElementById('replytext').value);
         if (!txt) { toast('Write a reply first'); return false; }
+        if (sendPost('reply', txt, id, '', '', function (ok) {
+          if (ok) { render(); toast('Reply posted'); }
+        })) { return false; }
         change(function (d) {
           var ts = list(d.topics);
           for (var z = 0; z < ts.length; z++) {
@@ -2205,6 +2364,8 @@ var ROAK = (function () {
 
   function doBan(name, reason) {
     adminOnly(function () {
+      if (askServer('admin.ban', { name: name, reason: reason || '' },
+          function () { render(); toast(name + ' is banned'); })) { return; }
       var now = (new Date()).getTime();
       change(function (d) {
         var b = list(d.bans);
@@ -2221,6 +2382,8 @@ var ROAK = (function () {
 
   function adminUnban(name) {
     adminOnly(function () {
+      if (askServer('admin.unban', { name: name },
+          function () { render(); toast(name + ' is welcome again'); })) { return; }
       change(function (d) {
         var b = list(d.bans);
         var keep = [];
@@ -2240,6 +2403,8 @@ var ROAK = (function () {
   /* hold a person's posts, messages and conversations until they are let back */
   function adminKick(name) {
     adminOnly(function () {
+      if (askServer('admin.kick', { name: name },
+          function () { render(); toast(name + ' is kicked out'); })) { return; }
       var now = (new Date()).getTime();
       change(function (d) {
         var accs = list(d.accounts);
@@ -2255,6 +2420,8 @@ var ROAK = (function () {
 
   function adminToggleAdmin(name) {
     adminOnly(function () {
+      if (askServer('admin.admin', { name: name },
+          function () { render(); toast('Changed'); })) { return; }
       change(function (d) {
         var accs = list(d.accounts);
         for (var i = 0; i < accs.length; i++) {
@@ -2268,6 +2435,8 @@ var ROAK = (function () {
   /* remove everything a person ever wrote */
   function adminPurge(name) {
     adminOnly(function () {
+      if (askServer('admin.purge', { name: name },
+          function () { render(); toast(name + '\'s posts are gone'); })) { return; }
       var key = nameKey(name);
       change(function (d) {
         var keep = [];
@@ -2314,6 +2483,8 @@ var ROAK = (function () {
   /* remove the account itself */
   function adminForget(name) {
     adminOnly(function () {
+      if (askServer('admin.forget', { name: name },
+          function () { render(); toast(name + ' is deleted'); })) { return; }
       var key = nameKey(name);
       change(function (d) {
         var accs = list(d.accounts);
@@ -2332,6 +2503,8 @@ var ROAK = (function () {
 
   function adminClear(which, label) {
     adminOnly(function () {
+      if (askServer('admin.clear', { kind: which },
+          function () { render(); toast('The ' + label + ' are cleared'); })) { return; }
       change(function (d) {
         d[which] = [];
       }, function () { render(); toast('The ' + label + ' are cleared'); });
@@ -2560,6 +2733,17 @@ var ROAK = (function () {
     if (lg) { lg.scrollTop = lg.scrollHeight; }
 
     document.getElementById('aiclear').onclick = function () {
+      if (workerOn()) {
+        /* remove each of this person's AI messages on the server */
+        var mine = aiMsgs();
+        for (var q = 0; q < mine.length; q++) {
+          askServer('delete', { id: mine[q].id }, function () { render(); });
+        }
+        aiSave([]);
+        render();
+        toast('Conversation cleared');
+        return false;
+      }
       if (!needName()) { return; }
       aiSave([]);
       change(function (d) { d.ai = { msgs: [] }; }, function () { render(); toast('Cleared'); });
@@ -2594,6 +2778,16 @@ var ROAK = (function () {
           : { id: newId('r'), by: 'ai', text: answer, at: (new Date()).getTime() };
         var withReply = aiMsgs().concat([reply]);
         aiSave(withReply);
+        if (workerOn()) {
+          /* keep the question and the answer on the server, for this person only */
+          sendPost('ai', q, '', '', '', function () {
+            sendPost('ai', answer || err, '', '', '', function () {
+              if (err) { render(); toast('No answer — see the message'); }
+              else { softAi(); }
+            });
+          });
+          return;
+        }
         change(function (d) { d.ai = { msgs: withReply }; }, function () {
           if (err) { render(); toast('No answer — see the message'); }
           else { softAi(); }
@@ -3029,6 +3223,11 @@ var ROAK = (function () {
     esc: esc,
     toast: toast,
     cloudOn: cloudOn,
+    /* exposed for testing the Worker path from Node */
+    workerOn: workerOn,
+    apiCall: apiCall,
+    sendPost: sendPost,
+    askServer: askServer,
     /* exposed for testing the admin powers from Node */
     isOwner: isOwner,
     isBanned: isBanned,
