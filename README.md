@@ -142,3 +142,13 @@ The power comes from the name, so it needs that account to exist and to be signe
 password like anyone else. **Worth knowing:** the database rules are open, so anyone who knows
 how could write to the data directly with a plain HTTP request. Real security needs a server
 that checks the password — see SECURITY.md.
+
+## Where the data lives
+
+`js/backend.js` decides. Put a Cloudflare Worker address ending in `/api` there and
+every read and write goes through the Worker: it checks the password, checks admin
+powers and refuses banned accounts on the server, so the rules are real. See
+**DEPLOY.md**. Leave it empty and the HQ keeps everything on this device only.
+
+The old Firebase Realtime Database address still works, but its rules are open:
+anyone could read the data, direct messages included.
