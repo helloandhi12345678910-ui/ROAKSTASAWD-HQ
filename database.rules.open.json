@@ -5,6 +5,10 @@
     "hq": {
       ".read": true,
       ".write": true
+    },
+    "ai": {
+      ".read": true,
+      ".write": true
     }
   }
 }
