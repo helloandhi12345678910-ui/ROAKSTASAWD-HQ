@@ -12,12 +12,23 @@ Live at: **https://helloandhi12345678910-ui.github.io/ROAKSTASAWD-HQ/**
 
 | Page | What it does |
 |---|---|
-| `#home` | Front door, links to everything, latest pins |
-| `#chat` | Short messages; last 100 shown, older ones on a button |
+| `#home` | Front door, links to everything, latest pins, member list |
+| `#chat` | Short messages, live: the log refreshes every second; last 100 shown, older ones on a button |
 | `#neighborhood` | Longer posts with optional one-word tags, likes, delete your own |
 | `#pinboard` | Pins: permanent notes, kept until you unpin them; edit your own |
 | `#topics` | One subject per thread, with replies |
 | `#js` | A JavaScript playground: write code, tap Run, read the output and a live preview |
+
+## Accounts
+
+- Joining makes an account: a **name** (20 characters max) and a **key** made on
+  the device. No two accounts can share a name — compared without capitals or
+  spaces, so `Big Joe`, `bigjoe` and `BIG JOE` are the same name.
+- The key is kept in the browser on the device that made the account, so that
+  device stays signed in. Signing in elsewhere means typing the key.
+- The key is what the page uses to decide which posts are yours (edit, delete,
+  unpin). It is not sent anywhere except inside the shared tree, so treat it like
+  a password and do not paste it into public places.
 
 ## How data is saved
 
@@ -28,7 +39,9 @@ Everything is one shared JSON tree (`hq`) with `meta`, `chat`, `neighborhood`,
   still works with no signal.
 - Each post: `GET`, change its own piece, `PUT` the whole tree back — no post lost
   to a stale page.
-- Pages check for changes every 20 seconds.
+- The page re-reads the tree every second on Chat and HQ, every five seconds
+  elsewhere, and straight after your own writes; it only redraws when something
+  actually changed, and the chat box you are typing in is left alone.
 - A failed write stays in the device copy and goes up on the next successful one.
 - Chat keeps the latest 300 on the server. Posts, pins, topics and replies are
   never trimmed by the site.
