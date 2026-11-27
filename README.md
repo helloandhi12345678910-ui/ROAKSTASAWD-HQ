@@ -113,3 +113,12 @@ in the shared document under `dm`, keyed by the two names sorted (so both people
 in the same conversation), with the display names kept beside the messages. The list of
 your conversations is built from your own name, so it is still there next time. The `+`
 on the Chat page picks a person; the `+` on Topics starts a new topic.
+
+## Scrolling
+
+The apps that are for reading — Chat, Direct messages, Topics (the list and a topic's
+replies) and AI Chat — keep their reading part inside a box that scrolls on its own. The
+page around it stays put, so the message box or the reply box is always on screen. The box
+height is measured from the device's own screen when the page draws (and on resize), with a
+CSS fallback for browsers that cannot measure; on a Kindle that means no long page scroll to
+reach the keyboard. The home page, the pinboard and the neighborhood still scroll normally.
