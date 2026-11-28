@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.0';
+  var BUILD = '4.1';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -497,6 +497,8 @@ var ROAK = (function () {
   function refresh() {
     /* Nothing at all while the sign-in sheet is open. */
     if (signinOpen) { return; }
+    /* nor while the new-topic sheet is open: its boxes are the person's */
+    if (pickerIsOpen()) { return; }
     if (polling || !cloudOn()) { return; }
     polling = true;
     pull(function (changed) {
@@ -3103,7 +3105,48 @@ var ROAK = (function () {
 
   var pickerMode = 'dm';
 
+  /* The sheet is open, and with what. A refresh must never take it away: it is
+     rebuilt where it stands, with whatever has been typed still in it. */
+  var pickerOpen = false;
+  var pickerMode = 'dm';
+  var pickerTyped = { topictitle: '', topictext: '', dmname: '' };
+
+  /* pickerOpen is the sheet itself. pickerWant is the person's intent: they
+     opened it and have not closed it. A redraw clears the first to wipe the
+     old sheet away; the second is what brings it back. */
+  var pickerWant = false;
+
+  function pickerFlag(flag) {
+    pickerOpen = !!flag;
+    try { window.ROAK_PICKER_OPEN = !!flag; } catch (e) {}
+  }
+
+  function pickerIsOpen() {
+    if (pickerOpen) { return true; }
+    try { return window.ROAK_PICKER_OPEN === true; } catch (e) { return false; }
+  }
+
+  function pickerWanted() {
+    if (pickerWant) { return true; }
+    try { return window.ROAK_PICKER_WANT === true; } catch (e) { return false; }
+  }
+
+  function pickerWantSet(flag) {
+    pickerWant = !!flag;
+    try { window.ROAK_PICKER_WANT = !!flag; } catch (e) {}
+  }
+
+  function pickerRemember() {
+    var ids = ['topictitle', 'topictext', 'dmname'];
+    for (var i = 0; i < ids.length; i++) {
+      var el = document.getElementById(ids[i]);
+      if (el) { pickerTyped[ids[i]] = String(el.value || ''); }
+    }
+  }
+
   function openPicker(mode) {
+    pickerWantSet(true);
+    pickerFlag(true);
     pickerMode = mode || 'dm';
     var el = document.getElementById('picker');
     if (!el) { return; }
@@ -3136,7 +3179,8 @@ var ROAK = (function () {
             '<span class="small">When another account exists, they show up here.</span></div>';
         }
         body += '<label for="dmname">Or type a name</label>' +
-          '<input type="text" id="dmname" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off">' +
+          '<input type="text" id="dmname" maxlength="20" autocomplete="off" autocorrect="off" ' +
+            'autocapitalize="off" value="' + esc(pickerTyped.dmname) + '">' +
           '<button class="btn wide" type="button" id="dmgo">Open the conversation</button>' +
           '<p class="small dim" id="dmnote"></p>';
       }
@@ -3151,9 +3195,10 @@ var ROAK = (function () {
       } else {
         body += '<form id="newtopic" action="#topics">' +
           '<label for="topictitle">Topic title</label>' +
-          '<input type="text" id="topictitle" maxlength="80" autocomplete="off" autocorrect="off" autocapitalize="off">' +
+          '<input type="text" id="topictitle" maxlength="80" autocomplete="off" autocorrect="off" ' +
+            'autocapitalize="off" value="' + esc(pickerTyped.topictitle) + '">' +
           '<label for="topictext">First post</label>' +
-          '<textarea id="topictext" maxlength="2000"></textarea>' +
+          '<textarea id="topictext" maxlength="2000">' + esc(pickerTyped.topictext) + '</textarea>' +
           '<button class="btn wide" type="submit">Start topic</button>' +
         '</form>';
       }
@@ -3165,13 +3210,14 @@ var ROAK = (function () {
 
     document.getElementById('pickclose').onclick = function (e) {
       e.preventDefault();
+      pickerWantSet(false);
       closePicker();
       return false;
     };
     var pin = document.getElementById('pickin');
-    if (pin) { pin.onclick = function (e) { e.preventDefault(); closePicker(); openSignin('in'); return false; }; }
+    if (pin) { pin.onclick = function (e) { e.preventDefault(); pickerWantSet(false); closePicker(); openSignin('in'); return false; }; }
     var pup = document.getElementById('pickup');
-    if (pup) { pup.onclick = function (e) { e.preventDefault(); closePicker(); openSignin('up'); return false; }; }
+    if (pup) { pup.onclick = function (e) { e.preventDefault(); pickerWantSet(false); closePicker(); openSignin('up'); return false; }; }
 
     var picks = el.getElementsByTagName('a');
     for (var p = 0; p < picks.length; p++) {
@@ -3212,21 +3258,50 @@ var ROAK = (function () {
   }
 
   function closePicker() {
+    pickerFlag(false);
+    pickerTyped = { topictitle: '', topictext: '', dmname: '' };
     var el = document.getElementById('picker');
     if (!el) { return; }
     el.style.display = 'none';
     el.innerHTML = '';
   }
 
+  /* after a redraw: put the sheet back, open, with what was typed in it */
+  function keepPicker() {
+    if (!pickerWanted()) { return; }
+    var el = document.getElementById('picker');
+    if (el && el.style.display === 'block' && el.innerHTML) { return; }
+    openPicker(pickerMode);
+  }
+
   function startTopic(titleRaw, textRaw) {
     if (!needName()) { return false; }
+    pickerRemember();
     var title = trim(titleRaw);
     var txt = trim(textRaw);
     if (!title) { toast('Give the topic a title'); return false; }
     if (!txt) { toast('Write the first post'); return false; }
     var nid = newId('t');
     var now = (new Date()).getTime();
+    pickerWantSet(false);
     closePicker();
+    if (workerOn()) {
+      /* the server is the truth: the topic is made there, and the page reads it
+         back with everything else */
+      apiCall('post', { kind: 'topic', title: title }, function (ok, d) {
+        if (!ok || !d || !d.id) {
+          toast((d && d.error) || 'That did not work');
+          return;
+        }
+        apiCall('post', { kind: 'reply', thread: d.id, text: txt }, function (ok2, d2) {
+          if (!ok2) { toast((d2 && d2.error) || 'The first post did not save'); }
+          window.location.hash = 'topics?id=' + encodeURIComponent(d.id);
+          render();
+          pull();
+        });
+      });
+      return false;
+    }
     change(function (d) {
       var ts = list(d.topics);
       ts.push({
@@ -3768,6 +3843,7 @@ var ROAK = (function () {
   function render() {
     var r = route();
     isAi = (r === 'ai');
+    pickerRemember();
     closePicker();
     signedInAgain();
     if (r === 'chat') { pageChat(); }
@@ -3781,6 +3857,7 @@ var ROAK = (function () {
     else if (r === 'dm') { pageDm(qs('id'), ''); }
     else { pageHome(); }
     keepSignin();
+    keepPicker();
   }
 
   /* The refresh redraws the page under the sheet. The sheet is drawn again in
