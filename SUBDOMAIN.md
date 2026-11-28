@@ -4,10 +4,9 @@ Stackryze Domains (domain.stackryze.com) hands out free subdomains such as
 `roak-hq.indevs.in`, `roak-hq.sryze.cc`, `roak-hq.ryzedns.org` or `roak-hq.nx.kg`,
 and lets you point them wherever you like with your own DNS provider.
 
-The HQ already has a home that is always on: the Cloudflare Worker
-`roak-hq.andysurfer66.workers.dev`. It serves `/api` (the shared database) and
-sends every other address on to the GitHub Pages site. A subdomain should point
-there, not at a home computer.
+The HQ already has a home that is always on: the Cloudflare Worker `roak-hq`,
+which serves the whole site *and* `/api` (the shared database) from its own
+name, with no redirect. A subdomain should point there, not at a home computer.
 
 ## What to do
 
@@ -22,15 +21,10 @@ there, not at a home computer.
    Domains & Routes → **Add → Custom domain** → type the new name. Cloudflare
    makes the DNS record and the certificate itself. The Worker then answers on
    that name.
-4. **Tell the site its address.** Once the name works, open `js/backend.js` and
-   set the site address, so a page opened from the new name finds the database:
-
-   ```js
-   window.ROAK_BACKEND = { url: 'https://roak-hq.indevs.in/api', ai: '' };
-   ```
-
-   (The Worker already finds itself when it is opened from its own workers.dev
-   address; this line covers the new name.) Then push.
+4. **Nothing else.** A page opened from the name finds the Worker's API by
+   itself (`siteOrigin()` in `js/app.js`). `js/backend.js` also names
+   `https://roak-hq.indevs.in/api`, so the GitHub Pages copy uses the same
+   database.
 
 ## Why not point the name at 172.1.177.154
 
