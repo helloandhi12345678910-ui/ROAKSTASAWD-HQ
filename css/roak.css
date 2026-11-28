@@ -1161,3 +1161,73 @@ select:focus {
   background: #cfcabf;
   color: #12161c;
 }
+
+/* ---------- the admin screen: nothing overlaps ----------
+   Every card is a heading, a line of plain words, then its own rows. Buttons
+   sit one under another, never side by side, so a long word or a small screen
+   cannot push one over the other. */
+.admcard {
+  margin-bottom: 10px;
+}
+.admcard p {
+  line-height: 1.45;
+}
+.admrest {
+  margin-bottom: 18px;
+}
+.admrest .btn,
+.admrest .box,
+.admrest textarea,
+.admrest input,
+.admrest label {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin-left: 0;
+  margin-right: 0;
+}
+.admrest .btn {
+  margin-bottom: 8px;
+  text-align: center;
+}
+.adminacts.stack {
+  display: block;
+}
+.adminacts.stack .btn {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px 0;
+  text-align: center;
+}
+.adminrow {
+  overflow: hidden;
+  word-wrap: break-word;
+}
+.adminname {
+  line-height: 1.35;
+  word-wrap: break-word;
+}
+.adminname .tag {
+  float: none;
+  display: inline-block;
+  margin: 2px 0 0 4px;
+  vertical-align: 2px;
+}
+
+/* the owner's "take this down" under a chat message */
+.msgdel {
+  margin-top: 4px;
+  border-top: 1px solid #4a515b;
+  padding-top: 4px;
+}
+.msgdel a {
+  display: inline-block;
+  font-size: 14px;
+  color: #9a958c;
+  text-decoration: underline;
+  padding: 6px 0;
+}
+.msgdel a:active {
+  color: #cfcabf;
+}
