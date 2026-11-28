@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.3';
+  var BUILD = '4.4';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1900,23 +1900,20 @@ var ROAK = (function () {
     if (!isOwner()) { return ''; }
     var mine = titleOf(me());
     var hidden = undercover();
-    return '<h2>Your name tag</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
+    return adminCard('Your name tag',
       'A short title after your name, everywhere it appears: ' +
-      (mine ? 'now <b>' + esc(mine) + '</b>' : 'none yet') + '.</p></div>' +
+      (mine ? 'now <b>' + esc(mine) + '</b>' : 'none yet') + '.',
       '<label for="ownertitle">Title (leave it empty to take it off)</label>' +
       '<input type="text" id="ownertitle" maxlength="24" autocomplete="off" ' +
         'autocorrect="off" autocapitalize="off" value="' + esc(mine) + '">' +
-      '<a class="btn wide" href="#" id="asavetitle">Save the title</a>' +
-      '<h2>Undercover</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
+      '<a class="btn wide" href="#" id="asavetitle">Save the title</a>') +
+      adminCard('Undercover',
       (hidden
         ? 'You are undercover: your tag is hidden, and nothing marks you as the owner ' +
           'to anyone else. You keep every power.'
-        : 'You are in plain sight: your tag and the owner mark are shown to everyone.') +
-      '</p></div>' +
+        : 'You are in plain sight: your tag and the owner mark are shown to everyone.'),
       '<a class="btn wide" href="#" id="aincognito">' +
-        (hidden ? 'Come back into the open' : 'Go undercover') + '</a>';
+        (hidden ? 'Come back into the open' : 'Go undercover') + '</a>');
   }
 
   function nameBox(what) {
@@ -2126,6 +2123,7 @@ var ROAK = (function () {
     shell('Chat', body);
     wireStart();
     wirePlus('global');
+    wireTakeDown();
     scrollChatToEnd();
 
     var more = document.getElementById('chatmore');
@@ -2145,6 +2143,7 @@ var ROAK = (function () {
         if (log.getElementsByClassName('empty').length) { log.innerHTML = ''; }
         log.innerHTML += '<div class="msg me"><span class="who">' + esc(msg.by) +
           '</span><span class="when">just now</span><div class="text">' + esc(msg.text) + '</div></div>';
+        wireTakeDown();
         scrollChatToEnd();
       }
       if (sendPost('chat', t, '', '', '', function () { refresh(); })) { return false; }
@@ -2322,6 +2321,8 @@ var ROAK = (function () {
         '<span class="who">' + tagged(m.by) + '</span>' +
         '<span class="when">' + when(m.at) + '</span>' +
         '<div class="text">' + esc(m.text) + '</div>' +
+        (isOwner() && m.id ? '<div class="msgdel"><a href="#" data-delm="' +
+          esc(m.id) + '">Take this down</a></div>' : '') +
       '</div>';
     }
     return h;
@@ -2365,6 +2366,7 @@ var ROAK = (function () {
       var h2 = dmLogHtml(did);
       if (dlog.innerHTML !== h2) {
         dlog.innerHTML = h2;
+        wireTakeDown();
         if (atEnd2) { scrollChatToEnd(); }
         dmSeen(did);
       }
@@ -2379,6 +2381,7 @@ var ROAK = (function () {
     var html = chatLogHtml();
     if (log.innerHTML !== html) {
       log.innerHTML = html;
+      wireTakeDown();
       if (atEnd) { scrollChatToEnd(); }
     }
     var all = list(tree.chat);
@@ -2491,6 +2494,34 @@ var ROAK = (function () {
         }
         d.neighborhood = keep;
       }, function () { render(); toast('Deleted'); });
+    });
+  }
+
+  /* the owner's "take this down" under any message, chat or direct */
+  function wireTakeDown() {
+    var root = document.getElementById('root');
+    if (!root) { return; }
+    var links = root.getElementsByTagName('a');
+    for (var i = 0; i < links.length; i++) {
+      var id = links[i].getAttribute('data-delm');
+      if (id) {
+        links[i].onclick = (function (mid) {
+          return function (e) {
+            e.preventDefault();
+            takeDown(mid);
+            return false;
+          };
+        })(id);
+      }
+    }
+  }
+
+  function takeDown(id) {
+    if (!isOwner()) { toast('Admins only'); return; }
+    apiCall('admin.del', { post: id }, function (ok, d) {
+      if (!ok) { toast((d && d.error) || 'That did not work'); return; }
+      toast('Taken down');
+      pull(function () { renderSoft(); });
     });
   }
 
@@ -2918,12 +2949,37 @@ var ROAK = (function () {
     var i;
 
     body += statusBox();
-    body += '<div class="box tight"><p class="small" style="margin:0">' +
-      'You are signed in as <b>' + esc(me()) + '</b>, the owner. Everything below acts ' +
-      'on the shared HQ straight away.</p></div>';
 
-    /* people */
-    body += '<h2>People (' + accounts.length + ')</h2>';
+    /* one card per job: a heading, a line of plain words, then its buttons */
+    body += adminCard('You are here',
+      'Signed in as <b>' + esc(me()) + '</b>, the owner. Everything on this screen acts ' +
+      'on the shared HQ straight away.', '');
+
+    body += adminCard('Boards',
+      chat.length + ' chat messages, ' + posts.length + ' neighborhood posts, ' +
+      pins.length + ' pins, ' + topics.length + ' topics.',
+      '<a class="btn wide" href="#" id="aclearchat">Clear the chat</a>' +
+      '<a class="btn wide" href="#" id="aclearboard">Clear the neighborhood</a>' +
+      '<a class="btn wide" href="#" id="aclearpins">Clear the pinboard</a>' +
+      '<a class="btn wide" href="#" id="acleartopics">Clear all topics</a>');
+
+    body += adminCard('Who is here',
+      'The address each person last signed in from and a short fingerprint of their ' +
+      'password. The password itself is never stored or shown. Everyone shares one ' +
+      'password shows the same fingerprint, which is how you spot it.',
+      '<a class="btn wide" href="#" id="apeople">Show who is here</a>') +
+      '<div id="peoplebox"></div>';
+
+    body += adminCard('Delete one thing',
+      'Take down a single message, post, pin or topic without touching the rest. ' +
+      'Deleting a topic takes its replies with it.',
+      '<a class="btn wide" href="#" id="athing">Show what can be deleted</a>') +
+      '<div id="thingbox"></div>';
+
+    body += adminCard('People (' + accounts.length + ')',
+      'Ban, kick, make an admin, or delete an account. The owner cannot be changed here.',
+      '');
+
     body += '<div class="room"><div class="roomlist">';
     if (!accounts.length) {
       body += '<div class="empty"><b>No accounts yet.</b></div>';
@@ -2939,7 +2995,7 @@ var ROAK = (function () {
           (admin ? ' <span class="tag">admin</span>' : '') +
           (banned ? ' <span class="tag">banned</span>' : '') +
         '</div>' +
-        '<div class="adminacts">' +
+        '<div class="adminacts stack">' +
           (owner ? '<span class="small dim">The owner cannot be changed here.</span>' :
             '<a class="btn small" href="#" data-ban="' + esc(a.name) + '">' + (banned ? 'Unban' : 'Ban') + '</a>' +
             '<a class="btn small" href="#" data-admin="' + esc(a.name) + '">' + (admin ? 'Remove admin' : 'Make admin') + '</a>' +
@@ -2951,47 +3007,18 @@ var ROAK = (function () {
     }
     body += '</div></div>';
 
-    /* boards */
-    body += '<h2>Boards</h2><div class="box tight"><p class="small" style="margin:0">' +
-      chat.length + ' chat messages &middot; ' + posts.length + ' neighborhood posts &middot; ' +
-      pins.length + ' pins &middot; ' + topics.length + ' topics</p></div>' +
-      '<a class="btn" href="#" id="aclearchat">Clear the chat</a> ' +
-      '<a class="btn" href="#" id="aclearboard">Clear the neighborhood</a> ' +
-      '<a class="btn" href="#" id="aclearpins">Clear the pinboard</a> ' +
-      '<a class="btn" href="#" id="acleartopics">Clear all topics</a>';
-
-    /* pinned notice */
-    var note = noticeFor('pins');
-    body += '<h2>Notice on the pinboard</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
-      (note ? 'Now: ' + esc(note.text) : 'No notice up.') + '</p></div>' +
-      '<label for="adminnote">Write a notice for everyone</label>' +
-      '<textarea id="adminnote" maxlength="500">' + esc(note ? note.text : '') + '</textarea>' +
-      '<a class="btn wide" href="#" id="asavenote">Put the notice up</a>' +
-      (note ? '<a class="btn wide" href="#" id="aclearnote">Take it down</a>' : '');
-
     /* the owner's own name tag and undercover mode */
     body += ownerBox();
 
-    /* who is here: address, password fingerprint, wrong tries */
-    body += '<h2>Who is here</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
-      'The address each person last signed in from, and a short fingerprint of their ' +
-      'password. The password itself is never stored or shown &mdash; only the fingerprint, ' +
-      'which is enough to spot two accounts using the same one. ' +
-      'Tap <b>Show</b> to load this list.</p></div>' +
-      '<a class="btn wide" href="#" id="apeople">Show who is here</a>' +
-      '<div id="peoplebox"></div>';
+    /* the notice, and the bans */
+    var note = noticeFor('pins');
+    body += adminCard('Notice on the pinboard',
+      (note ? 'Now: ' + esc(note.text) : 'No notice up.'),
+      '<label for="adminnote">Write a notice for everyone</label>' +
+      '<textarea id="adminnote" maxlength="500">' + esc(note ? note.text : '') + '</textarea>' +
+      '<a class="btn wide" href="#" id="asavenote">Put the notice up</a>' +
+      (note ? '<a class="btn wide" href="#" id="aclearnote">Take it down</a>' : ''));
 
-    /* one thing at a time */
-    body += '<h2>Delete one thing</h2>' +
-      '<div class="box tight"><p class="small" style="margin:0">' +
-      'Take down a single message, post, pin or topic without touching the rest. ' +
-      'Deleting a topic takes its replies with it.</p></div>' +
-      '<a class="btn wide" href="#" id="athing">Show what can be deleted</a>' +
-      '<div id="thingbox"></div>';
-
-    /* bans and the rules */
     body += '<h2>Bans (' + bans.length + ')</h2>';
     if (!bans.length) {
       body += '<div class="empty"><span class="small">Nobody is banned.</span></div>';
@@ -3003,13 +3030,20 @@ var ROAK = (function () {
           '<div class="post-actions"><a href="#" data-unban="' + esc(bans[i].name) + '">Unban</a></div></div>';
       }
     }
-    body += '<div class="box tight"><p class="small" style="margin:0">' +
-      '<b>Kick</b> signs that person out everywhere and holds their messages until you let them back. ' +
-      '<b>Ban</b> also blocks them from signing in. ' +
-      '<b>Delete account</b> removes the account itself — that cannot be undone.</p></div>';
+    body += adminCard('What the words mean',
+      '<b>Kick</b> signs that person out everywhere. <b>Ban</b> also stops them signing in. ' +
+      '<b>Delete account</b> removes the account itself and cannot be undone.', '');
 
     shell('Admin', body);
     wireAdmin();
+  }
+
+  /* one card of the admin screen: heading, a line of plain words, then what it
+     holds. Every part starts on its own line, so nothing can overlap. */
+  function adminCard(title, line, rest) {
+    return '<h2>' + esc(title) + '</h2>' +
+      '<div class="box tight admcard"><p class="small" style="margin:0">' + line + '</p></div>' +
+      '<div class="admrest">' + (rest || '') + '</div>';
   }
 
   function wireAdmin() {
@@ -3042,7 +3076,10 @@ var ROAK = (function () {
         setNotice('pins', t, function () { render(); toast(t ? 'Notice is up' : 'Notice taken down'); });
       }],
       ['aclearnote', function () { setNotice('pins', '', function () { render(); toast('Notice taken down'); }); }],
-      ['apeople', function () { adminPeople(); }],
+      ['apeople', function () {
+        var set = openSet(); set.people = true; openSave(set);
+        adminPeople();
+      }],
       ['asavetitle', function () {
         var t = trim(document.getElementById('ownertitle').value);
         apiCall('admin.title', { title: t }, function (ok, d) {
@@ -3067,7 +3104,10 @@ var ROAK = (function () {
           toast(on ? 'You are undercover' : 'You are in the open again');
         });
       }],
-      ['athing', function () { adminThings(); }]
+      ['athing', function () {
+        var set = openSet(); set.things = true; openSave(set);
+        adminThings();
+      }]
     ];
     for (var b = 0; b < btns.length; b++) {
       var el = document.getElementById(btns[b][0]);
@@ -4188,11 +4228,64 @@ var ROAK = (function () {
   }
 
   /* redraw without jumping to the top (used by the live refresh) */
+  /* ---------- what a redraw must never take away ----------
+     One list, used by every screen and every future one: a box the person has
+     typed in keeps its words, and a part that is open stays open. Nothing new
+     needs its own fix. */
+
+  function keptWords() {
+    var out = {};
+    try {
+      var els = document.getElementsByTagName('*');
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var id = el && el.id ? String(el.id) : '';
+        if (!id) { continue; }
+        var tag = String(el.tagName || '').toLowerCase();
+        if (tag === 'textarea' || tag === 'input') {
+          if (typeof el.value === 'string' && el.value !== '') { out[id] = el.value; }
+        } else if (el.innerHTML && /^(peoplebox|thingbox|topiclog|chatlog|dmlog|replies)$/.test(id)) {
+          out['#' + id] = el.innerHTML;
+        }
+      }
+    } catch (e) {}
+    return out;
+  }
+
+  function putWordsBack(kept) {
+    for (var k in kept) {
+      if (!kept.hasOwnProperty(k)) { continue; }
+      var el = null;
+      try {
+        if (k.charAt(0) === '#') {
+          el = document.getElementById(k.slice(1));
+          if (el && el.innerHTML !== kept[k]) { el.innerHTML = kept[k]; }
+          continue;
+        }
+        el = document.getElementById(k);
+      } catch (e) { el = null; }
+      if (!el) { continue; }
+      try {
+        if (typeof el.value === 'string' && el.value === '') { el.value = kept[k]; }
+      } catch (e2) {}
+    }
+  }
+
+  /* every full redraw goes through here */
   function renderSoft() {
     var y = 0;
     try { y = window.pageYOffset || document.documentElement.scrollTop || 0; } catch (e) {}
+    var kept = keptWords();
+    var open = openSet();
     render();
-    try { window.scrollTo(0, y); } catch (e) {}
+    putWordsBack(kept);
+    /* the panels that were opened by a button are opened again */
+    for (var k in open) {
+      if (!open.hasOwnProperty(k)) { continue; }
+      if (k === 'people') { adminPeople(); }
+      if (k === 'things') { adminThings(); }
+    }
+    try { window.scrollTo(0, y); } catch (e2) {}
   }
 
   function boot() {
