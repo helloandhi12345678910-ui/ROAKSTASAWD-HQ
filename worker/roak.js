@@ -561,12 +561,15 @@ async function adminAction(env, acc, what, p) {
     return { ok: true };
   }
   if (what === 'notice') {
+    /* a note on the pinboard ('pins') or on the HQ page ('home') */
+    var kind = String(p.kind || 'pins');
+    if (kind !== 'pins' && kind !== 'home') { return { error: 'Unknown place for a note.' }; }
     var text = str(trim(p.text), LIMITS.notice);
     if (!text) {
-      await run(env, 'DELETE FROM notices WHERE kind = ?', ['pins']);
+      await run(env, 'DELETE FROM notices WHERE kind = ?', [kind]);
     } else {
       await run(env, 'INSERT OR REPLACE INTO notices (kind, body, by, at) VALUES (?, ?, ?, ?)',
-        ['pins', text, acc.name, now()]);
+        [kind, text, acc.name, now()]);
     }
     return { ok: true };
   }
