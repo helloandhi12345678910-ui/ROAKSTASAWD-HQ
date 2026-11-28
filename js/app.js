@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.1';
+  var BUILD = '4.2';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -513,6 +513,7 @@ var ROAK = (function () {
       var r = route();
       if (r === 'chat' || r === 'dm') { softChat(); return; }
       if (r === 'ai') { softAi(); return; }
+      if (r === 'topics') { softTopics(); return; }
       if (r === 'code') { return; }   /* never redraw under someone typing code */
       /* Someone is writing a post or a comment: their box must not be touched,
          but everything else still updates, so what other people post shows up
@@ -2660,35 +2661,96 @@ var ROAK = (function () {
       wireStart();
       return;
     }
-    body += '<p class="small dim">One subject per thread. Every topic and reply is kept. ' +
-            'Tap <b>+</b> to start one.</p>';
+    body += '<p class="small dim">Every topic, newest first. Type below to start one, or ' +
+            'open one to read and answer it. New topics appear on their own.</p>';
 
-    body += '<div class="room"><div class="roomlist">';
-    var topics = list(tree.topics).reverse();
-    if (!topics.length) {
-      body += '<div class="empty"><b>No topics yet.</b><br><span class="small">Start the first one above.</span></div>';
-    }
-    for (i = 0; i < topics.length; i++) {
-      var tt = topics[i];
-      var n = list(tt.replies).length;
-      body += '<a class="topic" href="#topics?id=' + encodeURIComponent(tt.id) + '">' +
-        '<span class="t">' + esc(tt.title) + '</span>' +
-        '<span class="m">' + esc(tt.by) + ' &middot; ' + n + ' repl' + (n === 1 ? 'y' : 'ies') +
-        ' &middot; ' + when(tt.at) + '</span></a>';
-    }
-    body += '</div></div>';
+    body += '<div class="room">' +
+      '<div class="roomlist" id="topiclog">' + topicLogHtml() + '</div>' +
+      '<div class="roomfoot"><form id="topicform" action="#topics">' +
+        '<label for="newtopictitle">Start a topic</label>' +
+        '<input type="text" id="newtopictitle" maxlength="80" autocomplete="off" ' +
+          'autocorrect="off" autocapitalize="off" placeholder="What is it about?">' +
+        '<textarea id="newtopicfirst" maxlength="2000" placeholder="First post"></textarea>' +
+        '<button class="btn wide" type="submit">Start the topic</button>' +
+      '</form></div>' +
+    '</div>';
 
     shell('Topics', body);
     wireStart();
 
-    var tp = document.getElementById('topicplus');
-    if (tp) {
-      tp.onclick = function (e) {
+    var tform = document.getElementById('topicform');
+    if (tform) {
+      tform.onsubmit = function (e) {
         e.preventDefault();
-        openPicker('topic');
+        if (!needName()) { return false; }
+        var title = trim(document.getElementById('newtopictitle').value);
+        var first = trim(document.getElementById('newtopicfirst').value);
+        if (!title) { toast('Give the topic a title'); return false; }
+        if (!first) { toast('Write the first post'); return false; }
+        startTopic(title, first);
         return false;
       };
     }
+  }
+
+  /* the list of topics, drawn the same way every time so it can be replaced
+     in place, like the chat */
+  function topicLogHtml() {
+    var topics = list(tree.topics).reverse();
+    if (!topics.length) {
+      return '<div class="empty"><b>No topics yet.</b><br>' +
+        '<span class="small">Start the first one below.</span></div>';
+    }
+    var h = '';
+    for (var i = 0; i < topics.length; i++) {
+      var tt = topics[i];
+      var n = list(tt.replies).length;
+      h += '<a class="topic" href="#topics?id=' + encodeURIComponent(tt.id) + '">' +
+        '<span class="t">' + esc(tt.title) + '</span>' +
+        '<span class="m">' + esc(tt.by) + ' &middot; ' + n + ' repl' + (n === 1 ? 'y' : 'ies') +
+        ' &middot; ' + when(tt.at) + '</span></a>';
+    }
+    return h;
+  }
+
+  /* a topic's own screen redraws its replies in place, like the chat */
+  function softTopics() {
+    var log = document.getElementById('topiclog');
+    if (log) {
+      var h = topicLogHtml();
+      if (log.innerHTML !== h) { log.innerHTML = h; }
+      var st0 = document.getElementById('live');
+      if (st0) { st0.innerHTML = stampLine(); }
+      return;
+    }
+    var rep = document.getElementById('replies');
+    if (!rep) { return; }
+    var id = qs('id');
+    var t = null;
+    var all = list(tree.topics);
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].id === id) { t = all[i]; }
+    }
+    if (!t) { render(); return; }
+    var atEnd = (rep.scrollHeight - rep.scrollTop - rep.clientHeight) < 40;
+    var rs = list(t.replies);
+    var h2 = '';
+    if (!rs.length) {
+      h2 = '<div class="empty"><b>No replies yet.</b></div>';
+    }
+    for (var j = 0; j < rs.length; j++) {
+      h2 += '<div class="post">' +
+        '<div class="post-meta"><span class="who">' + esc(rs[j].by) + '</span> &middot; ' +
+          when(rs[j].at) + '</div>' +
+        '<div class="post-body">' + esc(rs[j].text) + '</div>' +
+      '</div>';
+    }
+    if (rep.innerHTML !== h2) {
+      rep.innerHTML = h2;
+      if (atEnd) { rep.scrollTop = rep.scrollHeight; }
+    }
+    var st1 = document.getElementById('live');
+    if (st1) { st1.innerHTML = stampLine(); }
   }
 
   /* ---------- direct messages ----------
@@ -2853,6 +2915,24 @@ var ROAK = (function () {
       '<a class="btn wide" href="#" id="asavenote">Put the notice up</a>' +
       (note ? '<a class="btn wide" href="#" id="aclearnote">Take it down</a>' : '');
 
+    /* who is here: address, password fingerprint, wrong tries */
+    body += '<h2>Who is here</h2>' +
+      '<div class="box tight"><p class="small" style="margin:0">' +
+      'The address each person last signed in from, and a short fingerprint of their ' +
+      'password. The password itself is never stored or shown &mdash; only the fingerprint, ' +
+      'which is enough to spot two accounts using the same one. ' +
+      'Tap <b>Show</b> to load this list.</p></div>' +
+      '<a class="btn wide" href="#" id="apeople">Show who is here</a>' +
+      '<div id="peoplebox"></div>';
+
+    /* one thing at a time */
+    body += '<h2>Delete one thing</h2>' +
+      '<div class="box tight"><p class="small" style="margin:0">' +
+      'Take down a single message, post, pin or topic without touching the rest. ' +
+      'Deleting a topic takes its replies with it.</p></div>' +
+      '<a class="btn wide" href="#" id="athing">Show what can be deleted</a>' +
+      '<div id="thingbox"></div>';
+
     /* bans and the rules */
     body += '<h2>Bans (' + bans.length + ')</h2>';
     if (!bans.length) {
@@ -2903,7 +2983,9 @@ var ROAK = (function () {
         var t = trim(document.getElementById('adminnote').value);
         setNotice('pins', t, function () { render(); toast(t ? 'Notice is up' : 'Notice taken down'); });
       }],
-      ['aclearnote', function () { setNotice('pins', '', function () { render(); toast('Notice taken down'); }); }]
+      ['aclearnote', function () { setNotice('pins', '', function () { render(); toast('Notice taken down'); }); }],
+      ['apeople', function () { adminPeople(); }],
+      ['athing', function () { adminThings(); }]
     ];
     for (var b = 0; b < btns.length; b++) {
       var el = document.getElementById(btns[b][0]);
@@ -2912,6 +2994,155 @@ var ROAK = (function () {
         return function (e) { e.preventDefault(); fn(); return false; };
       })(btns[b][1]);
     }
+  }
+
+  /* who is here: from the server, because it keeps the address and the
+     fingerprint. Nothing readable is in it. */
+  function adminPeople() {
+    var box = document.getElementById('peoplebox');
+    if (!box) { return; }
+    box.innerHTML = '<div class="box tight"><span class="small dim">Loading&hellip;</span></div>';
+    apiCall('admin.people', {}, function (ok, d) {
+      if (!ok || !d || !d.people) {
+        box.innerHTML = '<div class="box tight"><b>Could not load the list.</b><br>' +
+          '<span class="small">' + esc((d && d.error) || 'No answer from the server') + '</span></div>';
+        return;
+      }
+      var rows = d.people;
+      var h = '<div class="room"><div class="roomlist">';
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        h += '<div class="adminrow">' +
+          '<div class="adminname">' + esc(r.name) +
+            (r.banned ? ' <span class="tag">banned</span>' : '') +
+            (r.admin ? ' <span class="tag">admin</span>' : '') +
+            (r.shares > 1 ? ' <span class="tag">shares a password</span>' : '') +
+          '</div>' +
+          '<div class="small dim">address: ' + esc(r.ip || 'not seen yet') +
+            (r.ipAt ? ' &middot; ' + when(r.ipAt) : '') +
+            (r.mistakes ? ' &middot; ' + r.mistakes + ' wrong tries' : '') +
+          '</div>' +
+          '<div class="small dim">password fingerprint: ' + esc(r.hint || 'none yet') +
+            (r.shares > 1 ? ' &middot; ' + r.shares + ' accounts use it' : '') +
+          '</div>' +
+          '<div class="adminacts">' +
+            (r.ip ? '<a class="btn small" href="#" data-banip="' + esc(r.ip) + '">Ban this address</a>' : '') +
+            (r.hint ? '<a class="btn small" href="#" data-banpass="' + esc(r.hint) + '">Ban this password</a>' : '') +
+            (r.ip && !isOwnerKey(r.key) ?
+              '<a class="btn small" href="#" data-banuser="' + esc(r.name) + '">Ban this person</a>' : '') +
+          '</div>' +
+        '</div>';
+      }
+      h += '</div></div>';
+      box.innerHTML = h;
+      var links = box.getElementsByTagName('a');
+      for (var j = 0; j < links.length; j++) {
+        var v;
+        if ((v = links[j].getAttribute('data-banip'))) {
+          links[j].onclick = (function (ip) { return function (e) {
+            e.preventDefault(); askBlockReason('ip', ip, ''); return false; }; })(v);
+        } else if ((v = links[j].getAttribute('data-banpass'))) {
+          links[j].onclick = (function (hint) { return function (e) {
+            e.preventDefault(); askBlockReason('pass', hint, ''); return false; }; })(v);
+        } else if ((v = links[j].getAttribute('data-banuser'))) {
+          links[j].onclick = (function (n) { return function (e) {
+            e.preventDefault(); askBanReason(n); return false; }; })(v);
+        }
+      }
+    });
+  }
+
+  function isOwnerKey(k) { return String(k || '') === OWNER_KEY; }
+
+  /* why, then block: one sheet for an address and for a password */
+  function askBlockReason(kind, value, label) {
+    var ov = document.getElementById('picker');
+    var what = kind === 'ip' ? 'the address ' + value : 'this password';
+    ov.innerHTML = '<div class="sheet">' +
+      '<h2 style="margin-top:0">Ban everyone using ' + esc(what) + '</h2>' +
+      '<p class="small dim">Everyone who signs in from it, or uses it, is banned at once, ' +
+      'and it cannot be used to sign up again. The owner is never banned.</p>' +
+      '<label for="blockreason">Reason (they see this when they try to sign in)</label>' +
+      '<textarea id="blockreason" maxlength="200"></textarea>' +
+      '<a class="btn wide" href="#" id="blockok">Ban it</a>' +
+      '<a class="btn wide" href="#" id="blockcancel">Cancel</a>' +
+    '</div>';
+    ov.style.display = 'block';
+    pickerFlag(true);
+    document.getElementById('blockok').onclick = function (e) {
+      e.preventDefault();
+      var why = trim(document.getElementById('blockreason').value);
+      pickerWantSet(false);
+      closePicker();
+      var action = kind === 'ip' ? 'admin.banip' : 'admin.banpass';
+      var payload = kind === 'ip' ? { ip: value, reason: why } : { hint: value, reason: why };
+      apiCall(action, payload, function (ok, d) {
+        if (!ok) { toast((d && d.error) || 'That did not work'); return; }
+        toast('Banned ' + (d && d.banned ? d.banned + ' ' : '') + 'account' +
+          (d && d.banned === 1 ? '' : 's') + ', and it is blocked');
+        render();
+      });
+      return false;
+    };
+    document.getElementById('blockcancel').onclick = function (e) {
+      e.preventDefault();
+      pickerWantSet(false);
+      closePicker();
+      return false;
+    };
+  }
+
+  /* one thing at a time: the last messages, posts, pins and topics */
+  function adminThings() {
+    var box = document.getElementById('thingbox');
+    if (!box) { return; }
+    var h = '';
+    var groups = [
+      ['Chat', list(tree.chat).slice(-30).reverse(), 'chat'],
+      ['Neighborhood', list(tree.neighborhood).slice(-30).reverse(), 'post'],
+      ['Pins', list(tree.pins).slice(-30).reverse(), 'pin'],
+      ['Topics', list(tree.topics).slice(-30).reverse(), 'topic']
+    ];
+    for (var g = 0; g < groups.length; g++) {
+      var rows = groups[g][1];
+      h += '<h2>' + esc(groups[g][0]) + ' (' + rows.length + ')</h2>';
+      if (!rows.length) {
+        h += '<div class="empty"><span class="small">Nothing here.</span></div>';
+        continue;
+      }
+      h += '<div class="room"><div class="roomlist">';
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        var words = groups[g][2] === 'topic' ? r.title : r.text;
+        h += '<div class="adminrow">' +
+          '<div class="adminname">' + esc(r.by) + ' <span class="small dim">&middot; ' +
+            when(r.at) + '</span></div>' +
+          '<div class="small">' + esc(String(words || '').slice(0, 160)) + '</div>' +
+          '<div class="adminacts">' +
+            '<a class="btn small" href="#" data-delone="' + esc(r.id) + '">Delete this</a>' +
+          '</div>' +
+        '</div>';
+      }
+      h += '</div></div>';
+    }
+    box.innerHTML = h;
+    var links = box.getElementsByTagName('a');
+    for (var j = 0; j < links.length; j++) {
+      var v = links[j].getAttribute('data-delone');
+      if (v) {
+        links[j].onclick = (function (id) { return function (e) {
+          e.preventDefault(); adminDeleteOne(id); return false; }; })(v);
+      }
+    }
+  }
+
+  function adminDeleteOne(id) {
+    apiCall('admin.del', { post: id }, function (ok, d) {
+      if (!ok) { toast((d && d.error) || 'That did not work'); return; }
+      toast('Deleted');
+      render();
+      adminThings();
+    });
   }
 
   function adminOnly(fn) {
