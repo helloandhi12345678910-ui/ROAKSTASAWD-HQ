@@ -26,6 +26,15 @@ name, with no redirect. A subdomain should point there, not at a home computer.
    `https://roak-hq.indevs.in/api`, so the GitHub Pages copy uses the same
    database.
 
+## How updates get there
+
+The Worker reads the site's files (`index.html`, `css/roak.css`, `js/app.js`,
+`js/backend.js` and the notes) straight from the `main` branch of the GitHub
+repository, keeping each one for a minute. So **a push to `main` is live on
+roak-hq.indevs.in within about a minute** — no deploy step. The list of files it
+will serve is `SITE_PATHS` in `worker/roak.js`; a new file of a new kind (a new
+page, say) is added to that list once, and then it too follows GitHub.
+
 ## Why not point the name at 172.1.177.154
 
 That is this computer's own internet address. A name pointed there only works
