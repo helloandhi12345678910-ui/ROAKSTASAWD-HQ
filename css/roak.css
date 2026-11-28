@@ -103,6 +103,44 @@ body {
   margin: 0 6px 6px 0;
 }
 
+/* The corner of the HQ page: is the server up? */
+.corner {
+  text-align: right;
+  margin: 0 0 8px 0;
+}
+.serverlight {
+  display: inline-block;
+  border: 2px solid #000000;
+  padding: 6px 10px;
+  font-size: 14px;
+  font-weight: bold;
+}
+.serverlight .dot {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #000000;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.serverlight.up .dot {
+  background: #000000;
+}
+.serverlight.down .dot {
+  background: #ffffff;
+  border-style: dashed;
+}
+.serverlight.wait .dot {
+  background: #ffffff;
+}
+.serverlight.local {
+  border-style: dashed;
+}
+.serverlight .when {
+  font-weight: normal;
+  margin-left: 8px;
+}
+
 /* A notice the admin put up */
 .notice {
   border: 2px solid #000000;
