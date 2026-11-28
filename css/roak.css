@@ -39,6 +39,20 @@ body {
   border-bottom: 2px solid #e8e6e1;
   padding: 8px 10px;
   overflow: hidden;
+  word-wrap: break-word;
+}
+.bar .barwho {
+  display: block;
+  font-size: 15px;
+  line-height: 1.4;
+  color: #9a958c;
+  margin: 0 0 8px 0;
+}
+.bar .barwho a {
+  color: #e8e6e1;
+}
+.bar .barlink {
+  display: block;
 }
 .bar-title {
   display: inline-block;
@@ -1230,4 +1244,57 @@ select:focus {
 }
 .msgdel a:active {
   color: #cfcabf;
+}
+
+/* ---------- the last word on overlap ----------
+   Nothing on a page floats any more. Every block takes its own line, so two
+   things can never be drawn on top of each other, whatever the screen. */
+.wrap .box,
+.wrap .adminrow,
+.wrap .post,
+.wrap .msg,
+.wrap h1,
+.wrap h2,
+.wrap h3,
+.wrap p,
+.wrap label,
+.wrap form,
+.wrap .btn,
+.wrap .room,
+.wrap .notice,
+.wrap .empty,
+.wrap .live {
+  float: none !important;
+  clear: both;
+}
+.wrap h1,
+.wrap h2,
+.wrap h3 {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.25;
+}
+.wrap .btn {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 8px 0;
+  text-align: center;
+}
+.wrap .btn.small {
+  width: auto;
+  display: inline-block;
+  margin: 0 6px 6px 0;
+}
+.wrap .post-meta,
+.wrap .adminname {
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.wrap .post-meta .tag,
+.wrap .adminname .tag {
+  float: none !important;
+  display: inline-block;
+  margin: 2px 0 0 4px;
+  vertical-align: 2px;
 }
