@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.6';
+  var BUILD = '4.7';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1441,9 +1441,12 @@ var ROAK = (function () {
       dockBar(r) +
       '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div class="bar">' + whoBar +
-        '<a href="#home" class="barlink"><span class="bar-title">ROAKSTASAWD</span></a>' +
+        '<div class="barlow">' +
+          '<a href="#home" class="barlink"><span class="bar-title">ROAKSTASAWD</span></a>' +
+          (r === 'home' ? '' :
+            '<a class="closer" href="#home" id="tocloser" title="Back to the HQ">&#10005;</a>') +
+        '</div>' +
       '</div>' +
-      (r === 'home' ? '' : '<a class="closer" href="#home" id="tocloser" title="Back to the HQ">&#10005;</a>') +
       '<div class="wrap page-' + esc(r) + '">' +
         '<div id="live" class="live">' + stampLine() + '</div>' +
         '<h1>' + esc(title) + '</h1>' +
