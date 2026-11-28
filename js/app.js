@@ -1373,6 +1373,22 @@ var ROAK = (function () {
     return out;
   }
 
+  /* The Discord: a plain button and the QR code, on the HQ page only, so a
+     Kindle that cannot scan can still be typed the link by a friend. */
+  var DISCORD = 'https://discord.gg/ZXhBXCetKZ';
+
+  function discordBox() {
+    return '<h2>Discord</h2>' +
+      '<div class="box"><p class="small" style="margin:0 0 8px 0">' +
+        'The ROAKSTASAWD Discord is where the group chats off the HQ. ' +
+        'Tap the button, or scan the code with a phone.' +
+      '</p>' +
+      '<a class="btn wide" href="' + DISCORD + '">Join the Discord</a>' +
+      '<img class="qr" src="img-discord.png" alt="QR code for the ROAKSTASAWD Discord">' +
+      '<p class="small dim" style="margin:8px 0 0 0">' + esc(DISCORD) + '</p>' +
+      '</div>';
+  }
+
   function isAdminHere() {
     var who = me();
     if (!who) { return false; }
@@ -1477,6 +1493,9 @@ var ROAK = (function () {
 
     /* a note from the admin, and the box to write one, on this page only */
     body += adminNotesBox();
+
+    /* the group's Discord, with its QR code */
+    body += discordBox();
 
     /* what is happening */
     body += '<h2>Right now</h2>';
