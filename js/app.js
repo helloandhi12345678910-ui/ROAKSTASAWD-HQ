@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.6';
+  var BUILD = '3.7';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -458,10 +458,46 @@ var ROAK = (function () {
     return r === 'chat' || r === 'home' || r === 'ai' || r === 'dm';
   }
 
+  /* ---------- a box someone is writing in ---------- */
+  /* Whatever is in the box being typed in belongs to the person typing it. A
+     redraw of the page would throw it away and take the cursor with it, so
+     while a box is being written in, nothing redraws the page. */
+  var typingId = '';
+  var typingAt = 0;
+
+  function noteTyping() {
+    var el = null;
+    try { el = document.activeElement || null; } catch (e) { el = null; }
+    if (!el || !el.id) { return; }
+    var tag = String(el.tagName || '').toLowerCase();
+    if (tag !== 'textarea' && tag !== 'input') { return; }
+    if (el.id === 'accname' || el.id === 'accpass' || el.id === 'accpass2') { return; }
+    typingId = el.id;
+    typingAt = (new Date()).getTime();
+  }
+
+  /* is a box being written in, or was one a moment ago? */
+  function typingNow() {
+    var el = null;
+    try { el = document.activeElement || null; } catch (e) { el = null; }
+    var tag = el && el.id ? String(el.tagName || '').toLowerCase() : '';
+    if ((tag === 'textarea' || tag === 'input') && el.id !== 'accname' &&
+        el.id !== 'accpass' && el.id !== 'accpass2') {
+      typingId = el.id;
+      typingAt = (new Date()).getTime();
+      return true;
+    }
+    /* the cursor can slip away for a moment (a tap elsewhere, a redraw of one
+       small part): treat the box as busy for a little while after the last key */
+    if (typingId && (new Date()).getTime() - typingAt < 20000) { return true; }
+    return false;
+  }
+
   function refresh() {
     /* Nothing may touch the page while the sign-in sheet is open: no refresh,
        no redraw, no rebuild. The boxes are the person's, not the page's. */
     if (signinOpen) { return; }
+    if (typingNow()) { return; }
     if (polling || !cloudOn()) { return; }
     polling = true;
     pull(function (changed) {
@@ -485,13 +521,19 @@ var ROAK = (function () {
     if (poller || !cloudOn()) { return; }
     poller = window.setInterval(function () {
       if (signinOpen) { return; }   /* someone is typing their password */
+      if (typingNow()) { return; }  /* someone is writing something else */
       refresh();
     }, FAST_MS);
     try {
       window.addEventListener('focus', function () {
-        if (signinOpen) { return; }
+        if (signinOpen || typingNow()) { return; }
         refresh();
       }, false);
+      /* every key and every tap in a box says "this one is mine" */
+      window.addEventListener('keydown', noteTyping, true);
+      window.addEventListener('keyup', noteTyping, true);
+      window.addEventListener('input', noteTyping, true);
+      window.addEventListener('focusin', noteTyping, true);
     } catch (e) {}
   }
 
