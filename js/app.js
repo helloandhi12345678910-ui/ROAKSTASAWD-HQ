@@ -13,6 +13,12 @@
 
 var ROAK = (function () {
 
+  /* Which build this page is. Bump BUILD on every change that goes live, and
+     the stamp in the footer tells you at a glance whether the page you are
+     looking at is the new one or a copy the browser kept. */
+  var BUILD = '3.0';
+  var BUILD_DATE = '28 Nov 2026';
+
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
   var ME_KEY = 'roak.me';          /* { name, at } of the signed-in account */
   var NAME_KEY = 'roak.name.last';  /* the last name here, so the name can come back */
@@ -1232,6 +1238,7 @@ var ROAK = (function () {
           (cloudOn()
             ? 'accounts and posts are saved on the server.'
             : 'no backend set yet &mdash; posts stay on this device.') +
+          '<br><span class="build" id="buildstamp">' + esc(buildLine()) + '</span>' +
         '</footer>' +
       '</div>' +
       '<div id="picker" class="overlay" style="display:none"></div>' +
@@ -1402,6 +1409,12 @@ var ROAK = (function () {
   }
 
   /* The server light in the corner of the HQ page: one line, plain words. */
+  /* "Build 3.0 · 28 Nov 2026 · from the site" - short enough for a Kindle */
+  function buildLine() {
+    return 'Build ' + BUILD + ' \u00b7 ' + BUILD_DATE +
+      ' \u00b7 ' + (cloudOn() ? 'from the site' : 'on this device');
+  }
+
   function serverLight() {
     var on = cloudOn();
     var seen = serverSeen();
@@ -1557,6 +1570,9 @@ var ROAK = (function () {
     }
 
     body += '<div class="corner">' + serverLight() + '</div>';
+    /* which build this is, in plain words, at the top of the HQ page */
+    body += '<p class="small dim" id="hqbuild" style="margin:0 0 10px 0">' +
+            esc(buildLine()) + '</p>';
     body += statusBox();
 
     /* the apps, as big tiles, two to a row on wider screens */
