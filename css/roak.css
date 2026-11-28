@@ -169,7 +169,7 @@ img.qr {
 /* The x in the corner: back to the HQ screen, on every app page */
 .closer {
   position: fixed;
-  top: 6px;
+  top: 60px;
   right: 8px;
   z-index: 30;
   display: block;
@@ -196,7 +196,7 @@ img.qr {
   display: none;
 }
 
-/* The one bar with apps: fixed to the bottom of the screen, on every page */
+/* The one bar with apps: pinned to the top of the screen, on every page */
 .favbar {
   border-top: 2px solid #e8e6e1;
   padding: 6px 8px;
@@ -210,8 +210,10 @@ img.qr {
   position: fixed;
   left: 0;
   right: 0;
-  bottom: 0;
-  z-index: 25;
+  top: 0;
+  z-index: 35;
+  border-top: 0;
+  border-bottom: 2px solid #e8e6e1;
 }
 .favbar a.fav {
   display: inline-block;
@@ -344,7 +346,7 @@ img.qr {
 
 /* Page body */
 .wrap {
-  padding: 12px 12px 60px 12px;
+  padding: 12px 12px 24px 12px;
   max-width: 780px;
   margin: 0 auto;
 }
@@ -739,7 +741,7 @@ iframe.preview {
   position: fixed;
   left: 8px;
   right: 8px;
-  bottom: 8px;
+  top: 62px;
   background: #e8e6e1;
   color: #0e1116;
   font-weight: bold;
@@ -896,7 +898,7 @@ footer a {
     border-right: 0;
   }
   .wrap {
-    padding: 18px 16px 60px 16px;
+    padding: 18px 16px 24px 16px;
   }
   .chatlog {
     height: 420px;
@@ -930,7 +932,7 @@ footer a {
   border-bottom-width: 2px;
 }
 
-/* Sign-in overlay */
+/* Sign-in overlay: the whole screen, bar and all */
 .overlay {
   position: fixed;
   top: 0;
@@ -938,7 +940,7 @@ footer a {
   right: 0;
   bottom: 0;
   background: #0e1116;
-  z-index: 40;
+  z-index: 45;   /* over the bar: a question to answer before going anywhere */
   overflow-y: auto;
 }
 
