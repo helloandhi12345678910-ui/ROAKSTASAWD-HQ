@@ -14,7 +14,8 @@
 var ROAK = (function () {
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
-  var ME_KEY = 'roak.me';          /* { name, key } of the signed-in account */
+  var ME_KEY = 'roak.me';          /* { name, at } of the signed-in account */
+  var NAME_KEY = 'roak.name.last';  /* the last name here, so the name can come back */
   var VIEW_KEY = 'roak.view';      /* how many chat messages to show */
   var FAV_KEY = 'roak.favs';       /* the apps starred for the top bar, on this device */
   var CHAT_SHOWN = 100;            /* chat messages rendered at once */
@@ -99,6 +100,8 @@ var ROAK = (function () {
     var t = tokenGet();
     if (!t) { return; }
     try { window.localStorage.setItem('roak.token.backup', t); } catch (e) {}
+    var who = me();
+    if (who) { try { window.localStorage.setItem(NAME_KEY, who); } catch (e2) {} }
   }
 
   function tokenSet(t) {
@@ -517,10 +520,16 @@ var ROAK = (function () {
       if (name) { window.localStorage.setItem(ME_KEY, JSON.stringify({ name: name, at: (new Date()).getTime() })); }
       else { window.localStorage.removeItem(ME_KEY); }
     } catch (e) {}
-    /* a second copy, so a browser that clears one store still remembers */
+    /* a second copy, so a browser that clears one store still remembers, and
+       a plain last-name copy that brings the name back if only the token is left */
     try {
-      if (name) { window.localStorage.setItem(ME_KEY + '.backup', name); }
-      else { window.localStorage.removeItem(ME_KEY + '.backup'); }
+      if (name) {
+        window.localStorage.setItem(ME_KEY + '.backup', name);
+        window.localStorage.setItem(NAME_KEY, name);
+      } else {
+        window.localStorage.removeItem(ME_KEY + '.backup');
+        window.localStorage.removeItem(NAME_KEY);
+      }
     } catch (e2) {}
     return name;
   }
@@ -1121,22 +1130,18 @@ var ROAK = (function () {
 
   /* The one bar with apps, pinned to the top of the screen on every page.
      Tapping the app you are on (or the star) goes to the Favourites screen. */
+  /* The app bar: every app, always, in the same order, plus the HQ and Admin.
+     Nothing to star and nothing to manage - it is the same bar for everyone. */
   function dockBar(r) {
-    var mine = favs();
     var h = '<div class="favbar dock" id="favbar">' +
-      '<a class="fav' + (r === 'home' ? ' on' : '') + '" href="#home" title="The HQ screen">HQ</a>' +
-      '<a class="fav" href="#favorites"' + (r === 'favorites' ? ' class="on"' : '') + ' title="Favourites">&#9733;</a>' +
-      (isOwner() ? '<a class="fav" href="#admin"' + (r === 'admin' ? ' class="on"' : '') + ' title="Admin">Admin</a>' : '');
-    for (var i = 0; i < mine.length; i++) {
-      var k = mine[i];
-      var short = appLabel(k).replace('Neighborhood', 'Hood').replace('Pinboard', 'Pins');
-      var here = (r === k);
-      h += '<a class="fav' + (here ? ' on' : '') + '" href="#' + (here ? 'favorites' : k) + '"' +
-        (here ? ' title="You are here — tap to change your favourites"' : '') + '>' +
-        esc(short) + (here ? '<span class="favx">&#8635;</span>' : '') + '</a>';
+      '<a class="fav' + (r === 'home' ? ' on' : '') + '" href="#home" title="The HQ screen">HQ</a>';
+    if (isOwner()) {
+      h += '<a class="fav' + (r === 'admin' ? ' on' : '') + '" href="#admin" title="Admin">Admin</a>';
     }
-    if (!mine.length) {
-      h += '<span class="favempty">Tap &#9733; to keep an app here.</span>';
+    for (var i = 0; i < NAV.length; i++) {
+      var k = NAV[i][0];
+      var short = NAV[i][1].replace('Neighborhood', 'Hood').replace('Pinboard', 'Pins');
+      h += '<a class="fav' + (r === k ? ' on' : '') + '" href="#' + k + '">' + esc(short) + '</a>';
     }
     h += '</div>';
     return h;
@@ -1285,6 +1290,14 @@ var ROAK = (function () {
   /* Signing in is never taken back by the page's own refresh: the session is
      saved, and the next look at the server happens a moment later, once the
      token is in place. */
+  function signedInAgain() {
+    if (me()) { return; }
+    if (!tokenGet()) { return; }
+    var last = '';
+    try { last = window.localStorage.getItem(NAME_KEY) || ''; } catch (e) { last = ''; }
+    if (last) { setMe(last); }
+  }
+
   function afterSignin() {
     tokenRemember();
     for (var i = 0; i < 3; i++) {
@@ -1555,27 +1568,20 @@ var ROAK = (function () {
       ['ai', 'AI Chat', 'ask the AI', 'your own conversation'],
       ['code', 'Code', 'many languages', 'write and run code here']
     ];
-    var mine = favs();
     body += '<h2>Apps</h2>' +
-      '<p class="small dim">Every app is also in the bar along the bottom of the screen.</p>' +
+      '<p class="small dim">Every app is also in the bar along the top of the screen.</p>' +
       '<div class="tiles">';
     for (var t = 0; t < tiles.length; t++) {
       var k = tiles[t][0];
-      var starred = indexIn(mine, k) >= 0;
       body += '<div class="tile">' +
         '<a class="tilego" href="#' + k + '">' +
           '<span class="tt">' + esc(tiles[t][1]) + '</span>' +
           '<span class="tn">' + esc(tiles[t][2]) + '</span>' +
           '<span class="td">' + esc(tiles[t][3]) + '</span>' +
         '</a>' +
-        '<a class="tilestar' + (starred ? ' on' : '') + '" href="#" id="star-' + k + '" ' +
-          'title="' + (starred ? 'Remove from the top bar' : 'Put in the top bar') + '">' +
-          (starred ? '&#9733;' : '&#9734;') + '</a>' +
       '</div>';
     }
     body += '</div>';
-    body += '<p class="small dim">Tap &#9733; on an app to keep it in the bottom bar. ' +
-            '<a href="#favorites">Manage favourites</a></p>';
 
     /* a note from the admin, and the box to write one, on this page only */
     body += adminNotesBox();
@@ -1629,9 +1635,6 @@ var ROAK = (function () {
 
     shell('HQ', body);
 
-    for (var st = 0; st < tiles.length; st++) {
-      wireStar(tiles[st][0]);
-    }
     wireAdminNotes();
 
     var bi = document.getElementById('homein');
@@ -1650,55 +1653,22 @@ var ROAK = (function () {
     }
   }
 
-  function wireStar(key) {
-    var el = document.getElementById('star-' + key);
-    if (!el) { return; }
-    el.onclick = function (e) {
-      e.preventDefault();
-      var now = toggleFav(key);
-      render();
-      toast(now ? appLabel(key) + ' is in the top bar' : appLabel(key) + ' is out of the top bar');
-      return false;
-    };
-  }
-
-  /* Pick what sits in the top bar: one star per app, up to six. */
+  /* The app bar is the same for everyone: this page just shows what is in it. */
   function pageFavorites() {
-    if (!signedIn()) {
-      shell('Favourites', nameBox('favourites') + gateBox('the favourites bar'));
-      wireStart();
-      return;
-    }
-    var mine = favs();
     var body = '';
-    body += '<p class="small dim">Star an app and it sits in the top bar on every page, ' +
-            'so it is one tap away from anywhere. The <b>&times;</b> in the corner goes back to ' +
-            'the HQ screen. Six at most.</p>';
+    body += '<p class="small dim">Every app sits in the bar along the top of the screen, ' +
+            'on every page, so it is always one tap away. The <b>&times;</b> in the corner ' +
+            'goes back to the HQ screen.</p>';
     for (var i = 0; i < NAV.length; i++) {
-      var k = NAV[i][0];
-      var on = indexIn(mine, k) >= 0;
-      body += '<a class="pick" id="pick-' + k + '" href="#' + k + '">' +
-        '<span class="star">' + (on ? '&#9733;' : '&#9734;') + '</span>' +
+      body += '<a class="pick" href="#' + NAV[i][0] + '">' +
         '<span class="nm">' + esc(NAV[i][1]) + '</span>' +
-        '<span class="st">' + (on ? 'in the top bar' : 'not in the top bar') + '</span>' +
+        '<span class="st">open</span>' +
       '</a>';
     }
     body += '<a class="btn wide" href="#home">Back to the HQ</a>';
-
-    shell('Favourites', body);
-
-    function wirePick(key) {
-      var el = document.getElementById('pick-' + key);
-      if (!el) { return; }
-      el.onclick = function (e) {
-        e.preventDefault();
-        toggleFav(key);
-        render();
-        return false;
-      };
-    }
-    for (var j = 0; j < NAV.length; j++) { wirePick(NAV[j][0]); }
+    shell('Apps', body);
   }
+
 
   /* Chat has two rooms: the global chat everyone shares, and direct messages. */
   function pageChat() {
@@ -3442,6 +3412,7 @@ var ROAK = (function () {
     isAi = (r === 'ai');
     closeSignin();
     closePicker();
+    signedInAgain();
     if (r === 'chat') { pageChat(); }
     else if (r === 'neighborhood') { pageNeighborhood(); }
     else if (r === 'pinboard') { pagePinboard(); }
