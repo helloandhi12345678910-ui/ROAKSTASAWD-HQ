@@ -3490,8 +3490,25 @@ var ROAK = (function () {
   };
 })();
 
-if (window.addEventListener) {
-  window.addEventListener('DOMContentLoaded', ROAK.boot, false);
+/* Start. The page may already have finished loading by the time this runs (a
+   cached page, a slow Kindle), and then DOMContentLoaded never comes again -
+   so it is started straight away when the document is ready. */
+function roakStart() {
+  if (window.ROAK_STARTED) { return; }
+  window.ROAK_STARTED = true;
+  ROAK.boot();
+}
+
+if (document.readyState === 'loading') {
+  if (window.addEventListener) {
+    window.addEventListener('DOMContentLoaded', roakStart, false);
+  } else {
+    window.onload = roakStart;
+  }
+  /* a browser that never sends the event still starts, half a second later */
+  window.setTimeout(function () {
+    if (document.readyState !== 'loading') { roakStart(); }
+  }, 500);
 } else {
-  window.onload = ROAK.boot;
+  roakStart();
 }
