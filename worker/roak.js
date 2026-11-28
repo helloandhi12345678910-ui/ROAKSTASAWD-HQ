@@ -49,7 +49,9 @@ async function ensureSchema(env) {
     'ALTER TABLE accounts ADD COLUMN last_ip TEXT',
     'ALTER TABLE accounts ADD COLUMN last_ip_at INTEGER',
     'ALTER TABLE accounts ADD COLUMN pw_hint TEXT',
-    'ALTER TABLE accounts ADD COLUMN pw_hint_at INTEGER'
+    'ALTER TABLE accounts ADD COLUMN pw_hint_at INTEGER',
+    'ALTER TABLE accounts ADD COLUMN title TEXT',
+    'ALTER TABLE accounts ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0'
   ];
   for (var i = 0; i < adds.length; i++) {
     try { await env.DB.prepare(adds[i]).run(); } catch (e) { /* already there */ }
@@ -423,6 +425,8 @@ async function isAdmin(env, acc) {
 function publicAccount(acc) {
   return {
     name: acc.name,
+    title: acc.title || '',
+    incognito: !!acc.incognito,
     admin: !!(acc.admin || nameKey(acc.name) === OWNER_KEY),
     banned: !!acc.banned,
     banReason: acc.ban_reason || '',
@@ -1022,6 +1026,20 @@ async function adminAction(env, acc, what, p) {
     var hint2 = String(p.hint || '').slice(0, 64);
     await run(env, 'DELETE FROM pwbans WHERE hint = ?', [hint2]);
     return { ok: true };
+  }
+
+  /* the owner's own name tag, and going undercover */
+  if (what === 'title') {
+    if (nameKey(acc.name) !== OWNER_KEY) { return { error: 'Only the owner can do that.' }; }
+    var t = str(trim(p.title), 24);
+    await run(env, 'UPDATE accounts SET title = ? WHERE key = ?', [t, OWNER_KEY]);
+    return { ok: true, title: t };
+  }
+  if (what === 'incognito') {
+    if (nameKey(acc.name) !== OWNER_KEY) { return { error: 'Only the owner can do that.' }; }
+    var on = p.on ? 1 : 0;
+    await run(env, 'UPDATE accounts SET incognito = ? WHERE key = ?', [on, OWNER_KEY]);
+    return { ok: true, incognito: !!on };
   }
 
   if (what === 'clear') {
