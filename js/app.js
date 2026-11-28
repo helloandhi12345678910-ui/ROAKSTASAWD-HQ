@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.9';
+  var BUILD = '4.0';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -482,7 +482,7 @@ var ROAK = (function () {
     var el = null;
     try { el = document.activeElement || null; } catch (e) { el = null; }
     var tag = el && el.id ? String(el.tagName || '').toLowerCase() : '';
-    if ((tag === 'textarea' || tag === 'input') && el.id !== 'accname' &&
+    if ((tag === 'textarea' || tag === 'input' || tag === 'select') && el.id !== 'accname' &&
         el.id !== 'accpass' && el.id !== 'accpass2') {
       typingId = el.id;
       typingAt = (new Date()).getTime();
@@ -490,15 +490,13 @@ var ROAK = (function () {
     }
     /* the cursor can slip away for a moment (a tap elsewhere, a redraw of one
        small part): treat the box as busy for a little while after the last key */
-    if (typingId && (new Date()).getTime() - typingAt < 20000) { return true; }
+    if (typingId && (new Date()).getTime() - typingAt < 6000) { return true; }
     return false;
   }
 
   function refresh() {
-    /* Nothing may touch the page while the sign-in sheet is open: no refresh,
-       no redraw, no rebuild. The boxes are the person's, not the page's. */
+    /* Nothing at all while the sign-in sheet is open. */
     if (signinOpen) { return; }
-    if (typingNow()) { return; }
     if (polling || !cloudOn()) { return; }
     polling = true;
     pull(function (changed) {
@@ -511,11 +509,32 @@ var ROAK = (function () {
       }
       if (!changed) { return; }
       var r = route();
-      if (r === 'chat' || r === 'dm') { softChat(); }
-      else if (r === 'ai') { softAi(); }
-      else if (r === 'code') { return; }   /* never redraw under someone typing code */
-      else { renderSoft(); }
+      if (r === 'chat' || r === 'dm') { softChat(); return; }
+      if (r === 'ai') { softAi(); return; }
+      if (r === 'code') { return; }   /* never redraw under someone typing code */
+      /* Someone is writing a post or a comment: their box must not be touched,
+         but everything else still updates, so what other people post shows up
+         while they type. */
+      if (typingNow()) { softLists(); return; }
+      renderSoft();
     });
+  }
+
+  /* Redraw only the lists of posts, leaving every box on the page as it is,
+     so a post or a comment from someone else appears at once. */
+  function softLists() {
+    var r = route();
+    if (r === 'neighborhood' || r === 'pinboard' || r === 'topics') {
+      var focused = '';
+      try { focused = (document.activeElement && document.activeElement.id) || ''; } catch (e) { focused = ''; }
+      renderSoft();
+      if (focused) {
+        var back = document.getElementById(focused);
+        if (back && back.focus) {
+          try { back.focus(); } catch (e2) {}
+        }
+      }
+    }
   }
 
   function startPolling() {
@@ -1123,9 +1142,40 @@ var ROAK = (function () {
   }
 
   /* what people said under one post, and the box to add to it */
+  /* Comments open and close like a drawer, so a long thread never takes the
+     page over. The drawer remembers which ones were left open on this device. */
+  var OPEN_KEY = 'roak.comments.open';
+
+  function openSet() {
+    var out = {};
+    var raw = '';
+    try { raw = window.localStorage.getItem(OPEN_KEY) || ''; } catch (e) { raw = ''; }
+    var parts = raw ? raw.split('|') : [];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i]) { out[parts[i]] = true; }
+    }
+    return out;
+  }
+
+  function openSave(set) {
+    var parts = [];
+    for (var k in set) {
+      if (set.hasOwnProperty(k) && set[k]) { parts.push(k); }
+    }
+    try { window.localStorage.setItem(OPEN_KEY, parts.join('|')); } catch (e) {}
+  }
+
   function commentsFor(p) {
     var cs = p.comments || [];
-    var out = '<div class="comments">';
+    var isOpen = !!openSet()[p.id];
+    var out = '<div class="comments' + (isOpen ? ' open' : '') + '">' +
+      '<a class="drawer" href="#" data-open="' + esc(p.id) + '">' +
+        (isOpen ? '&#9660; ' : '&#9654; ') +
+        (cs.length
+          ? cs.length + (cs.length === 1 ? ' comment' : ' comments')
+          : (signedIn() ? 'Comment' : 'No comments')) +
+      '</a>' +
+      '<div class="drawerbody">';
     for (var i = 0; i < cs.length; i++) {
       out += '<div class="comment"><span class="who">' + esc(cs[i].by) + '</span> ' +
         '<span class="small dim">' + when(cs[i].at) + '</span><br>' +
@@ -1133,12 +1183,12 @@ var ROAK = (function () {
     }
     if (signedIn()) {
       out += '<form class="commentform" data-on="' + esc(p.id) + '" action="#">' +
-        '<label for="c' + esc(p.id) + '">Comment</label>' +
+        '<label for="c' + esc(p.id) + '">Write a comment</label>' +
         '<input type="text" id="c' + esc(p.id) + '" maxlength="300" ' +
           'autocomplete="off" autocorrect="off" autocapitalize="off">' +
         '<button class="btn wide" type="submit">Say it</button></form>';
     }
-    out += '</div>';
+    out += '</div></div>';
     return out;
   }
 
@@ -1146,6 +1196,41 @@ var ROAK = (function () {
   function wireComments() {
     var root = document.getElementById('root');
     if (!root) { return; }
+    var links = root.getElementsByTagName('a');
+    for (var d = 0; d < links.length; d++) {
+      var id = links[d].getAttribute('data-open');
+      if (id) {
+        links[d].onclick = (function (pid) {
+          return function (e) {
+            e.preventDefault();
+            var set = openSet();
+            set[pid] = !set[pid];
+            openSave(set);
+            /* redraw just this thread, so nothing else on the page moves */
+            var wrap = null;
+            var all = root.getElementsByClassName('comments');
+            for (var z = 0; z < all.length; z++) {
+              var a = all[z].getElementsByTagName('a')[0];
+              if (a && a.getAttribute('data-open') === pid) { wrap = all[z]; }
+            }
+            if (wrap) {
+              var was = wrap.className;
+              wrap.className = set[pid] ? 'comments open' : 'comments';
+              var arrow = wrap.getElementsByTagName('a')[0];
+              if (arrow) {
+                var txt = arrow.innerHTML.replace(/^[^ ]* /, '');
+                arrow.innerHTML = (set[pid] ? '&#9660; ' : '&#9654; ') + txt;
+              }
+              if (set[pid]) {
+                var box = wrap.getElementsByTagName('input')[0];
+                if (box && box.focus) { try { box.focus(); } catch (e3) {} }
+              }
+            }
+            return false;
+          };
+        })(id);
+      }
+    }
     var forms = root.getElementsByClassName('commentform');
     for (var i = 0; i < forms.length; i++) {
       forms[i].onsubmit = (function (form) {
