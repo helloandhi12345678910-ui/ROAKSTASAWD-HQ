@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.5';
+  var BUILD = '3.6';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1027,7 +1027,8 @@ var ROAK = (function () {
       var acc = findAccount(name);
       if (!acc) { done('No account called "' + name + '".'); return; }
       if (!acc.salt || !acc.hash) {
-        done('That account is from the old version and has no password. Make a new account.');
+        done('That name came over from the old HQ with no password. ' +
+             'Tap "I need an account" and use the same name to set one.');
         return;
       }
       if (nameKey(acc.name) !== OWNER_KEY && (isBanned(acc.name) || acc.banned)) {
@@ -1445,6 +1446,11 @@ var ROAK = (function () {
       '<p class="small">' + (signup
         ? 'A name, and a password only you know. No two accounts can share a name.'
         : 'Your name and password.') + '</p>' +
+      '<p class="small dim" style="margin:0 0 10px">' +
+        'An account brought over from the old HQ with no password: type your old name ' +
+        'and pick a password with <b>I need an account</b> &mdash; it takes the name back ' +
+        'and sets the password.' +
+      '</p>' +
       '<form id="accform" action="#">' +
         '<label for="accname">Name</label>' +
         '<input type="text" id="accname" name="roakname" maxlength="20" autocomplete="off" ' +
