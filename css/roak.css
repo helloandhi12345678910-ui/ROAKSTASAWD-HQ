@@ -1311,6 +1311,72 @@ select:focus {
   vertical-align: 2px;
 }
 
+/* ---------- the admin screen: no height cap anywhere ----------
+   Found by measuring the page in a real browser: the page script writes the
+   measured height straight onto the list as an inline style (height:240px), so
+   a stylesheet needs !important to win, and this rule is what wins. */
+.page-admin #peoplebox,
+.page-admin #thingbox {
+  height: auto !important;
+  max-height: none !important;
+  min-height: 0 !important;
+  overflow: visible !important;
+}
+
+   Measured in a real browser: the rows were laid out inside a box whose height
+   was capped (a measured room height and a 360px fallback), so once there were
+   more people than fitted, the rows were squeezed and drew over each other.
+   Here every box is as tall as its contents, and nothing may be clipped. */
+.page-admin .wrap,
+.page-admin .wrap * {
+  max-height: none !important;
+  height: auto !important;
+  overflow: visible !important;
+}
+.page-admin .room,
+.page-admin .roomlist,
+.page-admin .adminrow,
+.page-admin .admcard,
+.page-admin .admrest {
+  display: block !important;
+}
+.page-admin .adminrow {
+  margin-bottom: 14px;
+  border-bottom: 2px solid #4a515b;
+  padding-bottom: 12px;
+}
+
+/* ---------- the admin screen's own overflow ----------
+   The list of people sits in a .room, and .room is a flex column with
+   overflow: hidden. Its rows were being squeezed until they overlapped. A
+   plain block box has no such rule, so each row keeps its own height. */
+.page-admin .room {
+  display: block;
+  height: auto;
+  overflow: visible;
+}
+.page-admin .roomlist {
+  display: block;
+  height: auto;
+  max-height: none;
+  overflow: visible;
+  -webkit-box-flex: 0;
+  -webkit-flex: 0 0 auto;
+  flex: 0 0 auto;
+}
+.page-admin .adminrow {
+  display: block;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  clear: both;
+}
+.page-admin .adminacts.stack .btn {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px 0;
+}
+
 /* ---------- nothing is drawn on top of the page ----------
    The only things pinned to the screen are the app bar along the top and the
    sign-in / menu sheet, which covers the page on purpose. Everything else is
