@@ -531,6 +531,35 @@ select:focus {
   background: #e8e6e1;
   color: #0e1116;
 }
+/* what people said under a post or a pin */
+.comments {
+  margin-top: 10px;
+  border-top: 1px solid #4a515b;
+  padding-top: 8px;
+}
+.comment {
+  font-size: 16px;
+  padding: 6px 0 6px 10px;
+  border-left: 2px solid #4a515b;
+  margin-bottom: 6px;
+  word-wrap: break-word;
+}
+.comment .who {
+  font-weight: bold;
+  font-size: 15px;
+}
+.commentform {
+  margin-top: 8px;
+}
+.commentform label {
+  font-size: 13px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9a958c;
+  display: block;
+  margin-bottom: 4px;
+}
 .empty {
   border: 2px dashed #e8e6e1;
   padding: 18px 12px;
