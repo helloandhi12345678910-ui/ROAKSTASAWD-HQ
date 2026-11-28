@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.7';
+  var BUILD = '4.8';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1409,6 +1409,16 @@ var ROAK = (function () {
     var h = Math.floor(vh - top - under);
     if (h < 240) { h = 240; }
     if (h > 900) { h = 900; }
+
+    /* The screen the owner works on is a long list of people and actions.
+       Measuring it to the window and fixing that height squeezes the rows on
+       top of each other, so on this one screen the box is left to grow with
+       its contents and the page scrolls instead. */
+    var path = (window.location.hash || '').replace('#', '').split('?')[0];
+    if (path === 'admin') {
+      room.style.height = 'auto';
+      return;
+    }
     room.style.height = h + 'px';
   }
 
