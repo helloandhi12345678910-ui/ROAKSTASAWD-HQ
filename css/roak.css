@@ -95,7 +95,7 @@ body {
   color: #0e1116;
 }
 .nav .tag {
-  float: right;
+  display: inline-block;
   font-size: 13px;
   font-weight: normal;
   border: 1px solid #e8e6e1;
@@ -181,12 +181,22 @@ img.qr {
 }
 
 /* The x in the corner: back to the HQ screen, on every app page */
+/* the bar's own row: the title on the left, the x at the end of that row.
+   Both are in the flow, so neither is ever drawn over anything. */
+.bar .barlow {
+  display: table;
+  width: 100%;
+}
+.bar .barlow .barlink,
+.bar .barlow .closer {
+  display: table-cell;
+  vertical-align: middle;
+}
+.bar .barlow .closer {
+  width: 44px;
+  text-align: right;
+}
 .closer {
-  position: fixed;
-  top: 60px;
-  right: 8px;
-  z-index: 30;
-  display: block;
   width: 44px;
   height: 44px;
   line-height: 40px;
@@ -265,9 +275,13 @@ img.qr {
   margin-bottom: 12px;
   overflow: hidden;
 }
+.subtabs {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
 .subtabs .subtab {
-  float: left;
-  display: block;
+  display: table-cell;
   color: #e8e6e1;
   text-decoration: none;
   font-weight: bold;
@@ -296,8 +310,7 @@ img.qr {
   border-color: #0e1116;
 }
 .subtabs .plus {
-  float: right;
-  display: block;
+  display: table-cell;
   width: 46px;
   min-height: 44px;
   line-height: 40px;
@@ -647,8 +660,7 @@ select:focus {
 
 /* Home: the apps as a grid of tiles, two across */
 .tiles {
-  margin: 0 -5px 8px -5px;
-  overflow: visible;
+  margin: 0 0 8px 0;
 }
 .tiles:after {
   content: "";
@@ -656,8 +668,8 @@ select:focus {
   clear: both;
 }
 .tile {
-  float: left;
-  width: 50%;
+  display: block;
+  width: 100%;
   -moz-box-sizing: border-box;
   box-sizing: border-box;
   padding: 0 5px;
@@ -1297,4 +1309,26 @@ select:focus {
   display: inline-block;
   margin: 2px 0 0 4px;
   vertical-align: 2px;
+}
+
+/* ---------- nothing is drawn on top of the page ----------
+   The only things pinned to the screen are the app bar along the top and the
+   sign-in / menu sheet, which covers the page on purpose. Everything else is
+   in the flow of the page, so two things can never land on each other. */
+.wrap,
+.wrap * {
+  position: static;
+}
+.wrap .room,
+.wrap .roomlist,
+.wrap .chatlog {
+  position: static;
+}
+/* the status strip and the toast sit under the bar, in the page's own flow */
+.live {
+  margin-top: 4px;
+}
+#toast {
+  top: auto;
+  bottom: 8px;
 }
