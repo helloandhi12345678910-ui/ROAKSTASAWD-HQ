@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.4';
+  var BUILD = '4.5';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -304,11 +304,24 @@ var ROAK = (function () {
     }
   }
 
+  /* A change that matters to the eye: the same data stamped at a new moment is
+     not a change, and must not redraw the page. Without this, the page rebuilt
+     itself every second and any menu on it flickered. */
+  function viewSig(d) {
+    var copy = {};
+    for (var k in d) {
+      if (!d.hasOwnProperty(k)) { continue; }
+      if (k === 'meta') { continue; }
+      copy[k] = d[k];
+    }
+    try { return JSON.stringify(copy); } catch (e) { return sig(d); }
+  }
+
   function mergeRoom(name, d) {
-    var before = sig(tree);
+    var before = viewSig(tree);
     tree = normalize(d);
     localPut(tree);
-    return sig(tree) !== before;
+    return viewSig(tree) !== before;
   }
 
   /* Pull the shared copy (and the AI chat when that page is open) into memory.
@@ -4275,6 +4288,12 @@ var ROAK = (function () {
   function renderSoft() {
     var y = 0;
     try { y = window.pageYOffset || document.documentElement.scrollTop || 0; } catch (e) {}
+    /* a menu or sheet that is open is not redrawn under: its own state decides */
+    if (signinOpen || pickerWanted()) {
+      var stamp0 = document.getElementById('live');
+      if (stamp0) { stamp0.innerHTML = stampLine(); }
+      return;
+    }
     var kept = keptWords();
     var open = openSet();
     render();
