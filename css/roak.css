@@ -940,9 +940,12 @@ body {
   background-color: #0b0d10;
   background-image: url("../img-bg.png");
   background-repeat: no-repeat;
+  /* the whole picture, not a crop: as tall as the screen, centred, and the
+     colour behind it matches its darkest ink so the edges never show */
   background-position: center center;
-  background-size: cover;
+  background-size: auto 100%;
   background-attachment: fixed;
+  background-color: #0d1016;
   color: #e8e6e1;
 }
 
