@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.2';
+  var BUILD = '3.3';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -452,6 +452,9 @@ var ROAK = (function () {
   }
 
   function refresh() {
+    /* Nothing may touch the page while the sign-in sheet is open: no refresh,
+       no redraw, no rebuild. The boxes are the person's, not the page's. */
+    if (signinOpen) { return; }
     if (polling || !cloudOn()) { return; }
     polling = true;
     pull(function (changed) {
@@ -474,10 +477,14 @@ var ROAK = (function () {
   function startPolling() {
     if (poller || !cloudOn()) { return; }
     poller = window.setInterval(function () {
+      if (signinOpen) { return; }   /* someone is typing their password */
       refresh();
     }, FAST_MS);
     try {
-      window.addEventListener('focus', refresh, false);
+      window.addEventListener('focus', function () {
+        if (signinOpen) { return; }
+        refresh();
+      }, false);
     } catch (e) {}
   }
 
@@ -1350,8 +1357,9 @@ var ROAK = (function () {
     }
     signinMode = mode;
     signinError = error || '';
-    var pw = '<input type="password" id="accpass" maxlength="100" autocomplete="off" ' +
-             'autocorrect="off" autocapitalize="off" spellcheck="false">';
+    var pw = '<input type="password" id="accpass" name="roakpass" maxlength="100" ' +
+             'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" ' +
+             'data-lpignore="true">';
 
     var html = '<div class="box">' +
       '<h2 style="margin-top:0">' + (signup ? 'Make an account' : 'Sign in') + '</h2>' +
@@ -1361,15 +1369,16 @@ var ROAK = (function () {
         : 'Your name and password.') + '</p>' +
       '<form id="accform" action="#">' +
         '<label for="accname">Name</label>' +
-        '<input type="text" id="accname" maxlength="20" autocomplete="off" autocorrect="off" ' +
-          'autocapitalize="off" spellcheck="false" value="' +
+        '<input type="text" id="accname" name="roakname" maxlength="20" autocomplete="off" ' +
+          'autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" value="' +
             esc(typedName || (signup ? '' : me())) + '">' +
         '<label for="accpass">' + (signup ? 'Password (6+ characters)' : 'Password') + '</label>' +
         pw +
         (signup
           ? '<label for="accpass2">Password again</label>' +
-            '<input type="password" id="accpass2" maxlength="100" autocomplete="off" ' +
-            'autocorrect="off" autocapitalize="off" spellcheck="false">'
+            '<input type="password" id="accpass2" name="roakpass2" maxlength="100" ' +
+            'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" ' +
+            'data-lpignore="true">'
           : '') +
         '<button class="btn wide" type="submit" id="accgo">' +
           (signup ? 'Create account' : 'Sign in') + '</button>' +
