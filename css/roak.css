@@ -531,11 +531,32 @@ select:focus {
   background: #e8e6e1;
   color: #0e1116;
 }
-/* what people said under a post or a pin */
+/* what people said under a post or a pin: a drawer that opens on a tap */
 .comments {
   margin-top: 10px;
   border-top: 1px solid #4a515b;
   padding-top: 8px;
+}
+.comments .drawer {
+  display: block;
+  color: #e8e6e1;
+  font-size: 15px;
+  font-weight: bold;
+  text-decoration: none;
+  border: 1px solid #4a515b;
+  padding: 8px 10px;
+  min-height: 24px;
+}
+.comments .drawer:active {
+  background: #cfcabf;
+  color: #0e1116;
+}
+.comments .drawerbody {
+  display: none;
+  padding-top: 8px;
+}
+.comments.open .drawerbody {
+  display: block;
 }
 .comment {
   font-size: 16px;
