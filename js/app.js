@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.7';
+  var BUILD = '3.8';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -453,9 +453,10 @@ var ROAK = (function () {
 
   /* ---------- live refresh ---------- */
 
+  /* Every page keeps itself up to date, so anything anyone posts shows up
+     within a second or two without anyone touching the screen. */
   function fastRoute() {
-    var r = route();
-    return r === 'chat' || r === 'home' || r === 'ai' || r === 'dm';
+    return true;
   }
 
   /* ---------- a box someone is writing in ---------- */
@@ -1102,9 +1103,65 @@ var ROAK = (function () {
       if (!ok) {
         toast((d && d.error) || 'Could not send');
       }
+      /* straight to the server for the new state, so what was just sent is on
+         the screen at once rather than on the next tick */
+      if (ok) { pull(function () {}); }
       if (cb) { cb(ok, d); }
     });
     return true;
+  }
+
+  /* a comment under a post or a pin */
+  function sendComment(on, text, cb) {
+    if (!workerOn()) { return false; }
+    apiCall('comment', { on: on, text: text }, function (ok, d) {
+      if (!ok) { toast((d && d.error) || 'Could not send'); }
+      if (ok) { pull(function () {}); }
+      if (cb) { cb(ok, d); }
+    });
+    return true;
+  }
+
+  /* what people said under one post, and the box to add to it */
+  function commentsFor(p) {
+    var cs = p.comments || [];
+    var out = '<div class="comments">';
+    for (var i = 0; i < cs.length; i++) {
+      out += '<div class="comment"><span class="who">' + esc(cs[i].by) + '</span> ' +
+        '<span class="small dim">' + when(cs[i].at) + '</span><br>' +
+        esc(cs[i].text) + '</div>';
+    }
+    if (signedIn()) {
+      out += '<form class="commentform" data-on="' + esc(p.id) + '" action="#">' +
+        '<label for="c' + esc(p.id) + '">Comment</label>' +
+        '<input type="text" id="c' + esc(p.id) + '" maxlength="300" ' +
+          'autocomplete="off" autocorrect="off" autocapitalize="off">' +
+        '<button class="btn wide" type="submit">Say it</button></form>';
+    }
+    out += '</div>';
+    return out;
+  }
+
+  /* wire every comment box on the page, keeping whatever is typed in them */
+  function wireComments() {
+    var root = document.getElementById('root');
+    if (!root) { return; }
+    var forms = root.getElementsByClassName('commentform');
+    for (var i = 0; i < forms.length; i++) {
+      forms[i].onsubmit = (function (form) {
+        return function (e) {
+          e.preventDefault();
+          if (!needName()) { return false; }
+          var input = form.getElementsByTagName('input')[0];
+          var txt = trim(input ? input.value : '');
+          if (!txt) { toast('Write the comment first'); return false; }
+          if (sendComment(form.getAttribute('data-on'), txt, function (ok) {
+            if (ok) { render(); toast('Commented'); }
+          })) { return false; }
+          return false;
+        };
+      })(forms[i]);
+    }
   }
 
   /* Ask the Worker to act (delete, like, admin powers). */
@@ -2221,6 +2278,7 @@ var ROAK = (function () {
             '<a href="#" data-like="' + esc(p.id) + '">' + (liked ? '&#9733; Liked' : '&#9734; Like') + '</a>' +
             (p.by === me() ? '<a href="#" data-del="' + esc(p.id) + '">Delete</a>' : '') +
           '</div>' +
+          commentsFor(p) +
         '</div>';
       }
     }
@@ -2245,6 +2303,7 @@ var ROAK = (function () {
 
     shell('Neighborhood', body);
     wireStart();
+    wireComments();
 
     document.getElementById('postform').onsubmit = function (e) {
       e.preventDefault();
@@ -2333,6 +2392,7 @@ var ROAK = (function () {
                 '<a href="#" data-edit="' + esc(p.id) + '">Edit</a>'
               : '') +
           '</div>' +
+          commentsFor(p) +
         '</div>';
       }
     }
@@ -2366,6 +2426,7 @@ var ROAK = (function () {
 
     shell(editing ? 'Editing pin' : 'Pinboard', body);
     wireStart();
+    wireComments();
 
     document.getElementById('pinform').onsubmit = function (e) {
       e.preventDefault();
