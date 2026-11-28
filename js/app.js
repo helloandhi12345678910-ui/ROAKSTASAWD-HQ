@@ -88,7 +88,17 @@ var ROAK = (function () {
   }
 
   function tokenGet() {
-    try { return window.localStorage.getItem('roak.token') || ''; } catch (e) { return ''; }
+    var t = '';
+    try { t = window.localStorage.getItem('roak.token') || ''; } catch (e) { t = ''; }
+    if (t) { return t; }
+    try { return window.localStorage.getItem('roak.token.backup') || ''; } catch (e2) { return ''; }
+  }
+
+  /* the token in two places, so a cleared store does not sign anyone out */
+  function tokenRemember() {
+    var t = tokenGet();
+    if (!t) { return; }
+    try { window.localStorage.setItem('roak.token.backup', t); } catch (e) {}
   }
 
   function tokenSet(t) {
@@ -96,6 +106,10 @@ var ROAK = (function () {
       if (t) { window.localStorage.setItem('roak.token', t); }
       else { window.localStorage.removeItem('roak.token'); }
     } catch (e) {}
+    try {
+      if (t) { window.localStorage.setItem('roak.token.backup', t); }
+      else { window.localStorage.removeItem('roak.token.backup'); }
+    } catch (e2) {}
   }
 
   /* One call to the Worker. cb(ok, data) */
@@ -109,6 +123,11 @@ var ROAK = (function () {
       if (req.readyState !== 4) { return; }
       var d = null;
       try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
+      if (action === 'whoami') {
+        if (req.status >= 200 && req.status < 300 && d && d.name) { if (cb) { cb(true, d); } return; }
+        if (cb) { cb(false, d || { error: 'No connection' }); }
+        return;
+      }
       if (req.status >= 200 && req.status < 300 && d && !d.error) {
         serverNote(true);
         if (cb) { cb(true, d); }
@@ -119,6 +138,39 @@ var ROAK = (function () {
     };
     try { req.send(JSON.stringify({ action: action, payload: payload || {} })); }
     catch (e) { if (cb) { cb(false, { error: 'No connection' }); } }
+  }
+
+  /* ---------- keeping people signed in ---------- */
+
+  var sessionStrikes = 0;
+  var sessionChecking = false;
+
+  /* One "signin" or "banned" answer is not enough to sign someone out: a page
+     can ask the server in the same instant a sign-in finishes, and that reply
+     can belong to the old session. Ask again; only three answers in a row that
+     all say the token is dead sign the device out. */
+  function sessionSuspect(why) {
+    if (sessionChecking) { return; }
+    if (!tokenGet()) { sessionStrikes = 0; return; }
+    sessionChecking = true;
+    apiCall('whoami', {}, function (ok, d) {
+      sessionChecking = false;
+      if (ok && d && d.name) {
+        sessionStrikes = 0;
+        if (!me()) { setMe(d.name); }
+        tokenRemember();
+        return;
+      }
+      sessionStrikes++;
+      if (sessionStrikes < 3) { return; }
+      /* three strikes: the session really is over (signed out elsewhere, or banned) */
+      sessionStrikes = 0;
+      tokenSet('');
+      setMe('');
+      if (why === 'banned') { toast('That account has been banned from this HQ.'); }
+      else { toast('You were signed out. Sign in again.'); }
+      renderSoft();
+    });
   }
 
   function rootUrl() {
@@ -267,10 +319,11 @@ var ROAK = (function () {
           if (cb) { cb(moved); }
           return;
         }
-        if (d && d.error === 'signin' && tokenGet()) {
-          /* the session is over (signed out, banned, or signed in elsewhere) */
-          tokenSet('');
-          setMe('');
+        if (d && (d.error === 'signin' || d.error === 'banned') && tokenGet()) {
+          /* the token is dead. Never trust one answer for that: ask again, and
+             only give up if the same thing comes back every time. A session
+             that was just made must not be lost to a single early reply. */
+          sessionSuspect(d.error);
         }
         state = cached ? 'ready' : 'offline';
         lastError = (d && d.error) || 'No connection';
@@ -450,18 +503,25 @@ var ROAK = (function () {
   function me() {
     var raw = null;
     try { raw = window.localStorage.getItem(ME_KEY); } catch (e) {}
-    if (!raw) { return ''; }
-    var o = null;
-    try { o = JSON.parse(raw); } catch (e) { o = null; }
-    if (o && o.name) { return o.name; }
-    return '';                       /* old plain-name sign-ins are not accounts */
+    if (raw) {
+      var o = null;
+      try { o = JSON.parse(raw); } catch (e) { o = null; }
+      if (o && o.name) { return o.name; }
+    }
+    /* the copy from setMe, used when the main one has gone */
+    try { return window.localStorage.getItem(ME_KEY + '.backup') || ''; } catch (e2) { return ''; }
   }
 
   function setMe(name) {
     try {
-      if (name) { window.localStorage.setItem(ME_KEY, JSON.stringify({ name: name })); }
+      if (name) { window.localStorage.setItem(ME_KEY, JSON.stringify({ name: name, at: (new Date()).getTime() })); }
       else { window.localStorage.removeItem(ME_KEY); }
     } catch (e) {}
+    /* a second copy, so a browser that clears one store still remembers */
+    try {
+      if (name) { window.localStorage.setItem(ME_KEY + '.backup', name); }
+      else { window.localStorage.removeItem(ME_KEY + '.backup'); }
+    } catch (e2) {}
     return name;
   }
 
@@ -1059,7 +1119,7 @@ var ROAK = (function () {
     ['code', 'Code']
   ];
 
-  /* The one bar with apps, at the bottom of the screen on every page.
+  /* The one bar with apps, pinned to the top of the screen on every page.
      Tapping the app you are on (or the star) goes to the Favourites screen. */
   function dockBar(r) {
     var mine = favs();
@@ -1082,8 +1142,9 @@ var ROAK = (function () {
     return h;
   }
 
-  /* The bar sits at the bottom of the screen by CSS, and the page is given the
-     same space at its end so nothing hides behind it. */
+  /* The bar is fixed to the top of the screen by CSS, so it stays put while
+     the page moves under it. The spacer at the very top of the page is given
+     the bar's own height, so the title and the text never slide under it. */
   function stickBar() {
     var b = document.getElementById('favbar');
     var sp = document.getElementById('favspace');
@@ -1151,6 +1212,8 @@ var ROAK = (function () {
       : '<a class="btn small" style="float:right" href="#" id="signinbtn">Sign in</a>';
 
     var html =
+      dockBar(r) +
+      '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div class="bar">' + whoBar +
         '<a href="#home"><span class="bar-title">ROAKSTASAWD</span></a>' +
       '</div>' +
@@ -1166,8 +1229,6 @@ var ROAK = (function () {
             : 'no backend set yet &mdash; posts stay on this device.') +
         '</footer>' +
       '</div>' +
-      dockBar(r) +
-      '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div id="picker" class="overlay" style="display:none"></div>' +
       '<div id="signin" class="overlay" style="display:none"><div class="wrap" style="padding-top:0" id="signinbody"></div></div>' +
       '<div id="toast"></div>';
@@ -1219,6 +1280,19 @@ var ROAK = (function () {
   function closeSignin() {
     var el = document.getElementById('signin');
     if (el) { el.style.display = 'none'; }
+  }
+
+  /* Signing in is never taken back by the page's own refresh: the session is
+     saved, and the next look at the server happens a moment later, once the
+     token is in place. */
+  function afterSignin() {
+    tokenRemember();
+    for (var i = 0; i < 3; i++) {
+      window.setTimeout(function () {
+        if (!signedIn() || !tokenGet()) { return; }
+        pull(function () { renderSoft(); });
+      }, 400 + i * 1200);
+    }
   }
 
   function drawSignin(mode, error) {
@@ -1291,6 +1365,7 @@ var ROAK = (function () {
         closeSignin();
         render();
         toast(signup ? 'Welcome, ' + me() : 'Signed in as ' + me());
+        afterSignin();
       };
 
       if (signup) { signUp(name, pass, pass2, finish); }
@@ -1417,12 +1492,23 @@ var ROAK = (function () {
     }
   }
 
-  function nameBox() {
+  /* A page that is only for members: said once, in plain words, with the two
+     ways in right under it. Every app on the HQ uses this. */
+  function gateBox(what) {
+    return '<div class="empty">' +
+      '<b>' + esc(what.charAt(0).toUpperCase() + what.slice(1)) + ' is for members.</b><br>' +
+      '<span class="small">Sign in, or make an account, and it opens right up. ' +
+      'An account is only a name and a password.</span>' +
+      '</div>';
+  }
+
+  function nameBox(what) {
     if (signedIn()) { return ''; }
+    what = what || 'this';
     return '<div class="box">' +
-      '<b>Sign in to post.</b><br>' +
-      '<span class="small">An account is a name and a password only you know. ' +
-      'No two accounts can share a name.</span><br>' +
+      '<b>' + esc(what.charAt(0).toUpperCase() + what.slice(1)) + ' needs an account.</b><br>' +
+      '<span class="small">Sign in, or make one. An account is a name and a password ' +
+      'only you know. No two accounts can share a name.</span><br>' +
       '<a class="btn" href="#" id="start">Sign in</a> ' +
       '<a class="btn" href="#" id="startup">Make an account</a></div>';
   }
@@ -1541,13 +1627,6 @@ var ROAK = (function () {
         : 'No accounts yet &mdash; make the first one.') +
       '</p></div>';
 
-    /* how it works, kept short */
-    body += '<h2>How this place works</h2><div class="box tight"><p class="small" style="margin:0">' +
-      'One column, no sideways scrolling. No images, because a Kindle repaints the whole screen for one. ' +
-      'Buttons are big enough for a thumb. Chat refreshes every second, the rest every five. ' +
-      'Everything is saved for everyone.' +
-      '</p></div>';
-
     shell('HQ', body);
 
     for (var st = 0; st < tiles.length; st++) {
@@ -1585,6 +1664,11 @@ var ROAK = (function () {
 
   /* Pick what sits in the top bar: one star per app, up to six. */
   function pageFavorites() {
+    if (!signedIn()) {
+      shell('Favourites', nameBox('favourites') + gateBox('the favourites bar'));
+      wireStart();
+      return;
+    }
     var mine = favs();
     var body = '';
     body += '<p class="small dim">Star an app and it sits in the top bar on every page, ' +
@@ -1637,7 +1721,13 @@ var ROAK = (function () {
 
     body += head;
     body += statusBox();
-    body += nameBox();
+    body += nameBox('chat');
+    if (!signedIn()) {
+      body += gateBox('the chat');
+      shell('Chat', body);
+      wireStart();
+      return;
+    }
     body += '<div class="room">';
     body += '<p class="small dim" id="chatcount">' + all.length + ' message' + (all.length === 1 ? '' : 's') +
             ' saved. Showing the last ' + shownCount + '. Live: new messages appear on their own.</p>';
@@ -1690,11 +1780,10 @@ var ROAK = (function () {
   function pageDm(id, head) {
     var body = head;
     body += statusBox();
-    body += nameBox();
+    body += nameBox('direct messages');
 
     if (!signedIn()) {
-      body += '<div class="empty"><b>Direct messages are for members.</b><br>' +
-        '<span class="small">Sign in to see yours.</span></div>';
+      body += gateBox('direct messages');
       shell('Chat', body);
       wireStart();
       wirePlus('dm');
@@ -1955,7 +2044,13 @@ var ROAK = (function () {
     }
 
     body += statusBox();
-    body += nameBox();
+    body += nameBox('the neighborhood');
+    if (!signedIn()) {
+      body += gateBox('the neighborhood');
+      shell('Neighborhood', body);
+      wireStart();
+      return;
+    }
     body += '<p class="small dim">Post something, or read what the street is saying. Every post is kept.</p>';
     body += '<form id="postform" action="#neighborhood">' +
       '<label for="posttext">Your post</label>' +
@@ -2061,7 +2156,13 @@ var ROAK = (function () {
     }
 
     body += statusBox();
-    body += nameBox();
+    body += nameBox('the pinboard');
+    if (!signedIn()) {
+      body += gateBox('the pinboard');
+      shell('Pinboard', body);
+      wireStart();
+      return;
+    }
     body += '<div class="box tight"><p class="small" style="margin:0">' +
       '<b>The permanent board.</b> Pins are never trimmed or cleared by the site. ' +
       'Only you can edit or unpin your own pins. Keep it to things worth keeping: ' +
@@ -2222,7 +2323,13 @@ var ROAK = (function () {
       '<a class="plus" href="#" id="topicplus" title="New topic">+</a>' +
     '</div>';
     body += statusBox();
-    body += nameBox();
+    body += nameBox('topics');
+    if (!signedIn()) {
+      body += gateBox('topics');
+      shell('Topics', body);
+      wireStart();
+      return;
+    }
     body += '<p class="small dim">One subject per thread. Every topic and reply is kept. ' +
             'Tap <b>+</b> to start one.</p>';
 
@@ -2864,7 +2971,13 @@ var ROAK = (function () {
   function pageAi() {
     var body = '';
     body += statusBox();
-    body += nameBox();
+    body += nameBox('AI chat');
+    if (!signedIn()) {
+      body += gateBox('AI chat');
+      shell('AI Chat', body);
+      wireStart();
+      return;
+    }
     body += '<div class="room"><div class="roomlist">';
     body += '<div class="box tight"><p class="small" style="margin:0">' +
       '<b>Your own conversation with the AI.</b> It is kept in its own place in the ' +
@@ -3224,6 +3337,11 @@ var ROAK = (function () {
   }
 
   function pageCode() {
+    if (!signedIn()) {
+      shell('Code', nameBox('the code app') + gateBox('code'));
+      wireStart();
+      return;
+    }
     var lang = langOf(qs('lang'));
     var body = '';
     var i;
