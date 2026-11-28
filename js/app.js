@@ -52,8 +52,10 @@ var ROAK = (function () {
     try {
       var u = String(window.location.protocol || '') + '//' + String(window.location.host || '');
       if (u.indexOf('http') !== 0) { return ''; }
+      /* GitHub Pages is only the site; every other name that opens it - the
+         Worker's own address, or a name pointed at the Worker - has the API */
       if (/(^|\.)github\.io$/i.test(String(window.location.hostname || ''))) { return ''; }
-      if (/(^|\.)workers\.dev$/i.test(String(window.location.hostname || ''))) { return u + '/api'; }
+      if (window.location.hostname) { return u + '/api'; }
       return '';
     } catch (e) { return ''; }
   }
