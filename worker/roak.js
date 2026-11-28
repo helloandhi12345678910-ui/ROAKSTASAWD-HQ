@@ -515,6 +515,14 @@ async function handle(env, request, action, p) {
     if (acc && acc.banned) { return { error: 'banned' }; }
     return { state: await stateFor(env, acc) };
   }
+  /* Who am I? The page asks this before it ever signs anyone out, so one odd
+     answer can never throw away a session that is still good. */
+  if (action === 'whoami') {
+    if (!acc) { return { error: bearer(request) ? 'signin' : 'none' }; }
+    if (acc.banned) { return { error: 'banned' }; }
+    return { name: acc.name };
+  }
+
   if (action === 'signup') { return await signUp(env, p); }
   if (action === 'signin') { return await signIn(env, p); }
 
