@@ -9,7 +9,10 @@ window.ROAK_BACKEND = {
 
      The old Firebase Realtime Database address also still works, but its rules
      are open, so anyone could read the direct messages. */
-  url: '',
+  /* The HQ's own server. A page opened from roak-hq.indevs.in (or from the
+     Worker's address) finds the server by itself; this line makes the GitHub
+     Pages copy talk to the same server too. */
+  url: 'https://roak-hq.indevs.in/api',
 
   /* the AI helper the AI Chat app asks (optional) */
   ai: ''
