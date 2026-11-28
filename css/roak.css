@@ -940,7 +940,7 @@ footer a {
   right: 0;
   bottom: 0;
   background: #0e1116;
-  z-index: 45;   /* over the bar: a question to answer before going anywhere */
+  z-index: 60;   /* over the bar and everything else: nothing covers it */
   overflow-y: auto;
 }
 
