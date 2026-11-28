@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.4';
+  var BUILD = '3.5';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -176,8 +176,15 @@ var ROAK = (function () {
       sessionStrikes = 0;
       tokenSet('');
       setMe('');
-      if (why === 'banned') { toast('That account has been banned from this HQ.'); }
-      else { toast('You were signed out. Sign in again.'); }
+      if (why === 'banned') {
+        toast('That account has been banned from this HQ.');
+      } else if (passGet()) {
+        /* a password is kept here: sign back in without troubling anyone */
+        signInAgain();
+        return;
+      } else {
+        toast('You were signed out. Sign in again.');
+      }
       renderSoft();
     });
   }
@@ -1282,6 +1289,7 @@ var ROAK = (function () {
         /* through the Worker the session is ended on the server too, so the
            token cannot be used from anywhere afterwards */
         if (workerOn()) { apiCall('signout', {}, function () {}); }
+        passSet('');          /* signing out forgets the kept password too */
         tokenSet('');
         setMe('');
         closeSignin();
@@ -1337,10 +1345,70 @@ var ROAK = (function () {
      token is in place. */
   function signedInAgain() {
     if (me()) { return; }
-    if (!tokenGet()) { return; }
+    if (!tokenGet()) {
+      if (passGet()) { signInAgain(); }
+      return;
+    }
+    if (!passGet()) { return; }
+    /* a token is still stored, but the page does not believe it: keep trying
+       the kept password now and then until one of them works */
+    var nowMs = (new Date()).getTime();
+    if (nowMs - lastResign > 8000) {
+      lastResign = nowMs;
+      signInAgain();
+    }
     var last = '';
     try { last = window.localStorage.getItem(NAME_KEY) || ''; } catch (e) { last = ''; }
     if (last) { setMe(last); }
+  }
+
+  /* ---------- keeping the sign-in on this device ---------- */
+  /* The password is kept only when the person ticks the box, and only on this
+     device. It signs them in again by itself if the HQ forgets who they are,
+     so nobody has to type it a second time. */
+  var PASS_KEY = 'roak.pass';
+  var PASS_WANT = 'roak.pass.want';
+
+  function passGet() {
+    try { return window.localStorage.getItem(PASS_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function passSet(pass) {
+    try {
+      if (pass) {
+        window.localStorage.setItem(PASS_KEY, pass);
+        window.localStorage.setItem(PASS_WANT, '1');
+      } else {
+        window.localStorage.removeItem(PASS_KEY);
+        window.localStorage.removeItem(PASS_WANT);
+      }
+    } catch (e) {}
+  }
+
+  function passWanted() {
+    try { return window.localStorage.getItem(PASS_WANT) === '1'; } catch (e) { return false; }
+  }
+
+  /* sign in again from the password kept on this device, once at a time */
+  var resigning = false;
+  var lastResign = 0;
+
+  function signInAgain() {
+    if (resigning) { return; }
+    var pass = passGet();
+    var who = '';
+    try { who = window.localStorage.getItem(NAME_KEY) || ''; } catch (e) { who = ''; }
+    if (!pass || !who) { return; }
+    resigning = true;
+    /* the same call the sign-in form makes, so a kept password is treated
+       exactly like a typed one */
+    signIn(who, pass, function (err) {
+      resigning = false;
+      if (err) { return; }
+      tokenRemember();
+      renderSoft();
+      pull(function () { renderSoft(); });
+    });
   }
 
   function afterSignin() {
@@ -1390,6 +1458,17 @@ var ROAK = (function () {
             'autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" ' +
             'data-lpignore="true">'
           : '') +
+        '<label style="display:block;margin-top:12px">' +
+          '<input type="checkbox" id="acckeep" style="width:auto;min-height:0;margin-right:10px"' +
+          (passWanted() ? ' checked' : '') + '> Keep me signed in on this device' +
+        '</label>' +
+        '<p class="small" style="margin:4px 0 10px">' +
+          (passWanted()
+            ? 'Your password is kept on this device only, so the HQ can sign you back ' +
+              'in by itself. Untick the box to forget it.'
+            : 'Ticked, your password is kept on this device only, so the HQ can sign ' +
+              'you back in by itself if it forgets you.') +
+        '</p>' +
         '<button class="btn wide" type="submit" id="accgo">' +
           (signup ? 'Create account' : 'Sign in') + '</button>' +
         '<button class="btn wide" type="button" id="accswitch">' +
@@ -1441,8 +1520,11 @@ var ROAK = (function () {
 
       signinName = name;
       busy(true);
+      var keep = false;
+      try { keep = !!(document.getElementById('acckeep') || {}).checked; } catch (e) {}
       var finish = function (err) {
         if (err) { drawSignin(signup ? 'up' : 'in', err, name); return; }
+        passSet(keep ? pass : '');
         closeSignin();
         render();
         toast(signup ? 'Welcome, ' + me() : 'Signed in as ' + me());
@@ -1722,6 +1804,11 @@ var ROAK = (function () {
     if (bo) {
       bo.onclick = function (e) {
         e.preventDefault();
+        /* signing out ends the session on the server and forgets any password
+           kept on this device, or the page would sign straight back in */
+        if (workerOn()) { apiCall('signout', {}, function () {}); }
+        passSet('');
+        tokenSet('');
         setMe('');
         render();
         toast('Signed out');
