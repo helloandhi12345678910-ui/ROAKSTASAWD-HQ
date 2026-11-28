@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.5';
+  var BUILD = '4.6';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1433,15 +1433,15 @@ var ROAK = (function () {
 
     var who = me();
     var whoBar = who
-      ? '<span class="small" style="float:right;padding-top:6px">' + tagged(who) +
+      ? '<span class="barwho">' + tagged(who) +
         ' &middot; <a href="#" id="switchname"><u>sign out</u></a></span>'
-      : '<a class="btn small" style="float:right" href="#" id="signinbtn">Sign in</a>';
+      : '<a class="btn small barwho" href="#" id="signinbtn">Sign in</a>';
 
     var html =
       dockBar(r) +
       '<div id="favspace" style="height:0;margin:0;padding:0"></div>' +
       '<div class="bar">' + whoBar +
-        '<a href="#home"><span class="bar-title">ROAKSTASAWD</span></a>' +
+        '<a href="#home" class="barlink"><span class="bar-title">ROAKSTASAWD</span></a>' +
       '</div>' +
       (r === 'home' ? '' : '<a class="closer" href="#home" id="tocloser" title="Back to the HQ">&#10005;</a>') +
       '<div class="wrap page-' + esc(r) + '">' +
@@ -3090,7 +3090,15 @@ var ROAK = (function () {
       }],
       ['aclearnote', function () { setNotice('pins', '', function () { render(); toast('Notice taken down'); }); }],
       ['apeople', function () {
-        var set = openSet(); set.people = true; openSave(set);
+        var set = openSet();
+        if (set.people) {
+          /* a second press hides it again */
+          set.people = false; openSave(set);
+          var box = document.getElementById('peoplebox');
+          if (box) { box.innerHTML = ''; }
+          return;
+        }
+        set.people = true; openSave(set);
         adminPeople();
       }],
       ['asavetitle', function () {
@@ -3118,7 +3126,14 @@ var ROAK = (function () {
         });
       }],
       ['athing', function () {
-        var set = openSet(); set.things = true; openSave(set);
+        var set = openSet();
+        if (set.things) {
+          set.things = false; openSave(set);
+          var box2 = document.getElementById('thingbox');
+          if (box2) { box2.innerHTML = ''; }
+          return;
+        }
+        set.things = true; openSave(set);
         adminThings();
       }]
     ];
