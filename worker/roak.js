@@ -14,6 +14,7 @@
 */
 
 var OWNER_KEY = 'blockwobble';   // the owner of the HQ
+var SITE = 'https://helloandhi12345678910-ui.github.io/ROAKSTASAWD-HQ';
 var ITERATIONS = 100000;   // the most Cloudflare's PBKDF2 allows
 var SESSION_DAYS = 365;
 
@@ -606,8 +607,14 @@ export default {
       }
     }
 
-    /* anything else: the site's own files */
-    if (env.ASSETS) { return env.ASSETS.fetch(request); }
-    return json({ error: 'Not found.' }, 404);
+    /* anything else: the site's own files, straight from GitHub Pages, so the
+       Worker and the published site are always the same site */
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      return Response.redirect(SITE + '/index.html', 302);
+    }
+    if (url.pathname === '/api' || url.pathname === '/api/') {
+      return json({ error: 'POST only.' }, 405);
+    }
+    return Response.redirect(SITE + url.pathname + url.search, 302);
   }
 };
