@@ -22,10 +22,47 @@ var ROAK = (function () {
   var FAST_MS = 1000;              /* refresh rate on the chat page */
   var SLOW_MS = 5000;              /* refresh rate everywhere else */
 
+  /* ---------- is the server up? ----------
+     Every call the page makes records whether it got an answer and when, so the
+     corner of the HQ can say plainly how things stand. */
+
+  var SERVER_KEY = 'roak.server';
+
+  function serverSeen() {
+    var raw = null;
+    try { raw = window.localStorage.getItem(SERVER_KEY); } catch (e) { raw = null; }
+    if (!raw) { return { up: false, at: 0, ever: false }; }
+    try {
+      var d = JSON.parse(raw);
+      return { up: !!d.up, at: d.at || 0, ever: true };
+    } catch (e) { return { up: false, at: 0, ever: false }; }
+  }
+
+  function serverNote(up) {
+    var d = { up: !!up, at: (new Date()).getTime() };
+    try { window.localStorage.setItem(SERVER_KEY, JSON.stringify(d)); } catch (e) {}
+  }
+
   /* ---------- backend selection ---------- */
+
+  /* Where this copy of the site came from. The Worker serves the site and the
+     API from one address, so a page opened from the Worker talks to the Worker
+     without anyone having to type its address in. */
+  function siteOrigin() {
+    try {
+      var u = String(window.location.protocol || '') + '//' + String(window.location.host || '');
+      if (u.indexOf('http') !== 0) { return ''; }
+      if (/(^|\.)github\.io$/i.test(String(window.location.hostname || ''))) { return ''; }
+      if (/(^|\.)workers\.dev$/i.test(String(window.location.hostname || ''))) { return u + '/api'; }
+      return '';
+    } catch (e) { return ''; }
+  }
 
   function backend() {
     var b = window.ROAK_BACKEND;
+    if (siteOrigin()) {
+      return { url: siteOrigin(), ai: (b && b.ai) || '' };
+    }
     if (b && b.url && b.url.indexOf('http') === 0 && b.url.indexOf('YOUR-') < 0) {
       return b;
     }
@@ -71,9 +108,11 @@ var ROAK = (function () {
       var d = null;
       try { d = JSON.parse(req.responseText); } catch (e) { d = null; }
       if (req.status >= 200 && req.status < 300 && d && !d.error) {
+        serverNote(true);
         if (cb) { cb(true, d); }
         return;
       }
+      serverNote(false);
       if (cb) { cb(false, d || { error: req.status === 0 ? 'No connection' : 'Server said ' + req.status }); }
     };
     try { req.send(JSON.stringify({ action: action, payload: payload || {} })); }
@@ -535,7 +574,7 @@ var ROAK = (function () {
 
   function setNotice(kind, text, done) {
     if (workerOn()) {
-      apiCall('admin.notice', { text: text }, function (ok, d) {
+      apiCall('admin.notice', { text: text, kind: kind }, function (ok, d) {
         if (!ok) { toast((d && d.error) || 'Could not save the notice'); }
         if (done) { done(); }
       });
@@ -1272,6 +1311,94 @@ var ROAK = (function () {
     return '';
   }
 
+  /* The server light in the corner of the HQ page: one line, plain words. */
+  function serverLight() {
+    var on = cloudOn();
+    var seen = serverSeen();
+    var cls = ' light down';
+    var word = 'Down';
+    var why = '';
+    if (!on) {
+      cls = ' light local';
+      word = 'On this device';
+      why = 'No server is set, so everything is kept on this device only.';
+    } else if (state === 'loading' && !seen.ever) {
+      cls = ' light wait';
+      word = 'Checking';
+      why = 'Asking the server how things are.';
+    } else if (seen.up && state !== 'offline') {
+      cls = ' light up';
+      word = 'Up';
+      why = 'The server answered ' + (seen.at ? when(seen.at) : 'just now') + '.';
+    } else {
+      why = seen.at
+        ? 'The last answer from the server was ' + when(seen.at) + '.'
+        : 'The server has not answered yet.';
+    }
+    /* cls carries its own "light " so one class list reads plainly */
+    return '<div class="serverlight' + cls + '" title="' + esc(why) + '">' +
+      '<span class="dot"></span>' + esc(word) +
+      '<span class="when">' + esc(seen.at && on ? when(seen.at) : '') + '</span></div>';
+  }
+
+  /* ---------- admin notes on the HQ page ---------- */
+
+  function noteFor(kind) {
+    var n = list(tree.notices);
+    for (var i = 0; i < n.length; i++) {
+      if (n[i].kind === kind) { return n[i]; }
+    }
+    return null;
+  }
+
+  function adminNotesBox() {
+    var note = noteFor('home');
+    var out = '';
+    if (note) {
+      out += '<div class="notice"><b>Note from ' + esc(note.by) + '</b><br>' + esc(note.text) +
+        '<br><span class="small dim">' + when(note.at) + '</span></div>';
+    } else if (!isAdminHere()) {
+      return '';
+    }
+    if (isAdminHere()) {
+      out += '<div class="box tight"><label for="homenote">' +
+        (note ? 'Change the note' : 'Write a note for everyone') + '</label>' +
+        '<textarea id="homenote" maxlength="500">' + (note ? esc(note.text) : '') + '</textarea>' +
+        '<a class="btn wide" href="#" id="homenotesave">' + (note ? 'Save the note' : 'Put the note up') + '</a>' +
+        (note ? '<a class="btn wide" href="#" id="homenoteclear">Take it down</a>' : '') +
+        '</div>';
+    }
+    return out;
+  }
+
+  function isAdminHere() {
+    var who = me();
+    if (!who) { return false; }
+    if (isOwner()) { return true; }
+    var acc = accountNamed(who);
+    return !!(acc && acc.admin);
+  }
+
+  function wireAdminNotes() {
+    var save = document.getElementById('homenotesave');
+    if (save) {
+      save.onclick = function (e) {
+        e.preventDefault();
+        var t = trim(document.getElementById('homenote').value);
+        setNotice('home', t, function () { render(); toast(t ? 'Note is up' : 'Note taken down'); });
+        return false;
+      };
+    }
+    var clear = document.getElementById('homenoteclear');
+    if (clear) {
+      clear.onclick = function (e) {
+        e.preventDefault();
+        setNotice('home', '', function () { render(); toast('Note taken down'); });
+        return false;
+      };
+    }
+  }
+
   function nameBox() {
     if (signedIn()) { return ''; }
     return '<div class="box">' +
@@ -1312,6 +1439,7 @@ var ROAK = (function () {
         '<a class="btn" href="#" id="homeup">Make an account</a></div>';
     }
 
+    body += '<div class="corner">' + serverLight() + '</div>';
     body += statusBox();
 
     /* the apps, as big tiles, two to a row on wider screens */
@@ -1342,8 +1470,11 @@ var ROAK = (function () {
       '</div>';
     }
     body += '</div>';
-    body += '<p class="small dim">Tap &#9733; on an app to keep it in the top bar. ' +
+    body += '<p class="small dim">Tap &#9733; on an app to keep it in the bottom bar. ' +
             '<a href="#favorites">Manage favourites</a></p>';
+
+    /* a note from the admin, and the box to write one, on this page only */
+    body += adminNotesBox();
 
     /* what is happening */
     body += '<h2>Right now</h2>';
@@ -1401,6 +1532,7 @@ var ROAK = (function () {
     for (var st = 0; st < tiles.length; st++) {
       wireStar(tiles[st][0]);
     }
+    wireAdminNotes();
 
     var bi = document.getElementById('homein');
     if (bi) { bi.onclick = function (e) { e.preventDefault(); openSignin('in'); return false; }; }
