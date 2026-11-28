@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.3';
+  var BUILD = '3.4';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1297,14 +1297,24 @@ var ROAK = (function () {
   /* ----- sign in / make an account ----- */
 
   /* is the sheet open, and with what */
+  /* Set by the sheet itself when it is opened or closed. It is declared on
+     window so that no part of the code can be missing it, whatever order the
+     browser runs the file in. Without it the page never redraws itself. */
+  if (typeof window.ROAK_SIGNIN_OPEN === 'undefined') { window.ROAK_SIGNIN_OPEN = false; }
   var signinOpen = false;
   var signinMode = 'in';
   var signinError = '';
   var signinName = '';
 
+  function setSigninOpen(flag) {
+    signinOpen = !!flag;
+    try { window.ROAK_SIGNIN_OPEN = !!flag; } catch (e) {}
+  }
+
   function openSignin(mode) {
     var el = document.getElementById('signin');
     if (!el) { return; }
+    setSigninOpen(true);
     var wasOpen = signinOpen && signinMode === (mode || 'in') && el.style.display === 'block';
     el.style.display = 'block';
     signinOpen = true;
@@ -1316,7 +1326,7 @@ var ROAK = (function () {
   }
 
   function closeSignin() {
-    signinOpen = false;
+    setSigninOpen(false);
     signinError = '';
     var el = document.getElementById('signin');
     if (el) { el.style.display = 'none'; }
