@@ -22,9 +22,10 @@ var OWNER_KEY = 'blockwobble';   // the owner of the HQ
 var ASSET_FILES = {};
 var REPO = 'helloandhi12345678910-ui/ROAKSTASAWD-HQ';
 var BRANCH = 'main';
-var CACHE_MS = 60000;          /* how long a fetched file is kept */
+var CACHE_MS = 20000;          /* how long a fetched file is kept */
+var HEAD_MS = 20000;           /* how long the branch's commit is remembered */
 var SITE_PATHS = ['index.html', 'css/roak.css', 'js/app.js', 'js/backend.js',
-                  'img-bg.png',
+                  'img-bg.png', 'img-discord.png',
                   'README.md', 'BACKEND.md', 'SECURITY.md', 'DEPLOY.md',
                   'SUBDOMAIN.md', 'DUCKDNS.md', '.nojekyll'];
 var cache = {};                /* path -> { text, at } */
@@ -60,10 +61,24 @@ async function siteFile(path, wait) {
   var hit = cache[path];
   var now = Date.now();
   if (hit && (now - hit.at) < CACHE_MS) { return hit.bytes || hit.text; }
-  if (hit && wait) { return hit.bytes || hit.text; }
   try {
-    var res = await fetch('https://raw.githubusercontent.com/' + REPO + '/' + BRANCH + '/' + path,
-      { cf: { cacheTtl: 60 } });
+    /* the commit at the head of the branch, so a push shows up at once and no
+       cache in the middle can hold an older file */
+    var head = cache.__head;
+    if (!head || (now - head.at) > HEAD_MS) {
+      var hr = await fetch('https://api.github.com/repos/' + REPO + '/commits/' + BRANCH,
+        { headers: { 'accept': 'application/vnd.github+json', 'user-agent': 'roak-hq' } });
+      var sha = '';
+      if (hr.status === 200) {
+        var j = await hr.json();
+        sha = String((j && j.sha) || '');
+      }
+      cache.__head = { sha: sha, at: now };
+      head = cache.__head;
+    }
+    var where = 'https://raw.githubusercontent.com/' + REPO + '/' +
+      (head && head.sha ? head.sha : BRANCH) + '/' + path;
+    var res = await fetch(where, { headers: { 'user-agent': 'roak-hq' } });
     if (res.status !== 200) {
       return hit ? (hit.bytes || hit.text) : null;
     }
