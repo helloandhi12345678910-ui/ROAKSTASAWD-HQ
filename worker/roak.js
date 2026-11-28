@@ -14,7 +14,7 @@
 */
 
 var OWNER_KEY = 'blockwobble';   // the owner of the HQ
-var ITERATIONS = 120000;
+var ITERATIONS = 100000;   // the most Cloudflare's PBKDF2 allows
 var SESSION_DAYS = 365;
 
 var LIMITS = {
