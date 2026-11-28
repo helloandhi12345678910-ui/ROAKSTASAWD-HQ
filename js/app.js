@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.0';
+  var BUILD = '3.1';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1242,7 +1242,8 @@ var ROAK = (function () {
         '</footer>' +
       '</div>' +
       '<div id="picker" class="overlay" style="display:none"></div>' +
-      '<div id="signin" class="overlay" style="display:none"><div class="wrap" style="padding-top:0" id="signinbody"></div></div>' +
+      '<div id="signin" class="overlay" style="' + (signinOpen ? 'display:block' : 'display:none') + '">' +
+        '<div class="wrap" style="padding-top:0" id="signinbody"></div></div>' +
       '<div id="toast"></div>';
 
     document.getElementById('root').innerHTML = html;
@@ -1282,14 +1283,28 @@ var ROAK = (function () {
 
   /* ----- sign in / make an account ----- */
 
+  /* is the sheet open, and with what */
+  var signinOpen = false;
+  var signinMode = 'in';
+  var signinError = '';
+  var signinName = '';
+
   function openSignin(mode) {
     var el = document.getElementById('signin');
     if (!el) { return; }
+    var wasOpen = signinOpen && signinMode === (mode || 'in') && el.style.display === 'block';
     el.style.display = 'block';
-    drawSignin(mode || 'in', '');
+    signinOpen = true;
+    signinMode = mode || 'in';
+    if (wasOpen) { return; }        /* already up: never wipe what is typed */
+    signinError = '';
+    signinName = '';
+    drawSignin(signinMode, '');
   }
 
   function closeSignin() {
+    signinOpen = false;
+    signinError = '';
     var el = document.getElementById('signin');
     if (el) { el.style.display = 'none'; }
   }
@@ -1315,10 +1330,20 @@ var ROAK = (function () {
     }
   }
 
-  function drawSignin(mode, error) {
+  function drawSignin(mode, error, keepName) {
     var box = document.getElementById('signinbody');
     if (!box) { return; }
     var signup = mode === 'up';
+    /* what was typed, so a redraw never wipes it */
+    var typedName = keepName !== undefined ? keepName : signinName;
+    var typedPass = '';
+    var typedPass2 = '';
+    if (signinOpen) {
+      try { typedPass = document.getElementById('accpass').value || ''; } catch (e1) {}
+      try { typedPass2 = document.getElementById('accpass2').value || ''; } catch (e2) {}
+    }
+    signinMode = mode;
+    signinError = error || '';
     var pw = '<input type="password" id="accpass" maxlength="100" autocomplete="off" ' +
              'autocorrect="off" autocapitalize="off" spellcheck="false">';
 
@@ -1331,7 +1356,8 @@ var ROAK = (function () {
       '<form id="accform" action="#">' +
         '<label for="accname">Name</label>' +
         '<input type="text" id="accname" maxlength="20" autocomplete="off" autocorrect="off" ' +
-          'autocapitalize="off" spellcheck="false" value="' + (signup ? '' : esc(me())) + '">' +
+          'autocapitalize="off" spellcheck="false" value="' +
+            esc(typedName || (signup ? '' : me())) + '">' +
         '<label for="accpass">' + (signup ? 'Password (6+ characters)' : 'Password') + '</label>' +
         pw +
         (signup
@@ -1357,11 +1383,20 @@ var ROAK = (function () {
       '</p></div>';
     box.innerHTML = html;
 
+    /* what was already typed goes back in, so a redraw costs nothing */
+    if (typedPass) { try { document.getElementById('accpass').value = typedPass; } catch (e3) {} }
+    if (typedPass2 && document.getElementById('accpass2')) {
+      try { document.getElementById('accpass2').value = typedPass2; } catch (e4) {}
+    }
+
     var f = document.getElementById('accname');
-    if (f) { try { f.focus(); } catch (e) {} }
+    if (f && !typedName) { try { f.focus(); } catch (e) {} }
 
     document.getElementById('accswitch').onclick = function () {
-      drawSignin(signup ? 'in' : 'up', '');
+      var keep = '';
+      try { keep = document.getElementById('accname').value || ''; } catch (e5) {}
+      signinName = keep;
+      drawSignin(signup ? 'in' : 'up', '', keep);
     };
     document.getElementById('acccancel').onclick = function () {
       closeSignin();
@@ -1379,9 +1414,10 @@ var ROAK = (function () {
         b.innerHTML = flag ? 'Working&hellip;' : (signup ? 'Create account' : 'Sign in');
       }
 
+      signinName = name;
       busy(true);
       var finish = function (err) {
-        if (err) { drawSignin(signup ? 'up' : 'in', err); return; }
+        if (err) { drawSignin(signup ? 'up' : 'in', err, name); return; }
         closeSignin();
         render();
         toast(signup ? 'Welcome, ' + me() : 'Signed in as ' + me());
@@ -3426,7 +3462,6 @@ var ROAK = (function () {
   function render() {
     var r = route();
     isAi = (r === 'ai');
-    closeSignin();
     closePicker();
     signedInAgain();
     if (r === 'chat') { pageChat(); }
@@ -3439,6 +3474,15 @@ var ROAK = (function () {
     else if (r === 'admin') { pageAdmin(); }
     else if (r === 'dm') { pageDm(qs('id'), ''); }
     else { pageHome(); }
+    keepSignin();
+  }
+
+  /* The refresh redraws the page under the sheet. The sheet is drawn again in
+     the same spot, with the same words, and stays open until it is closed on
+     purpose - a redraw must never take a half-typed sign-in away. */
+  function keepSignin() {
+    if (!signinOpen) { return; }
+    drawSignin(signinMode, signinError, signinName);
   }
 
   /* redraw without jumping to the top (used by the live refresh) */
