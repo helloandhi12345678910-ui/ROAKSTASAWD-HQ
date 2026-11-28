@@ -24,6 +24,7 @@ var REPO = 'helloandhi12345678910-ui/ROAKSTASAWD-HQ';
 var BRANCH = 'main';
 var CACHE_MS = 60000;          /* how long a fetched file is kept */
 var SITE_PATHS = ['index.html', 'css/roak.css', 'js/app.js', 'js/backend.js',
+                  'img-bg.png',
                   'README.md', 'BACKEND.md', 'SECURITY.md', 'DEPLOY.md',
                   'SUBDOMAIN.md', 'DUCKDNS.md', '.nojekyll'];
 var cache = {};                /* path -> { text, at } */
@@ -58,19 +59,25 @@ var MIME = {
 async function siteFile(path, wait) {
   var hit = cache[path];
   var now = Date.now();
-  if (hit && (now - hit.at) < CACHE_MS) { return hit.text; }
-  if (hit && wait) { return hit.text; }
+  if (hit && (now - hit.at) < CACHE_MS) { return hit.bytes || hit.text; }
+  if (hit && wait) { return hit.bytes || hit.text; }
   try {
     var res = await fetch('https://raw.githubusercontent.com/' + REPO + '/' + BRANCH + '/' + path,
       { cf: { cacheTtl: 60 } });
     if (res.status !== 200) {
-      return hit ? hit.text : null;
+      return hit ? (hit.bytes || hit.text) : null;
+    }
+    /* a picture comes back as raw bytes, everything else as text */
+    if (/\.(png|jpg|jpeg|gif|ico)$/i.test(path)) {
+      var bytes = new Uint8Array(await res.arrayBuffer());
+      cache[path] = { bytes: bytes, at: now };
+      return bytes;
     }
     var text = await res.text();
     cache[path] = { text: text, at: now };
     return text;
   } catch (e) {
-    return hit ? hit.text : null;
+    return hit ? (hit.bytes || hit.text) : null;
   }
 }
 
@@ -93,6 +100,7 @@ async function serveSite(request, url) {
     });
   }
   var ext = path.split('.').pop().toLowerCase();
+  /* a picture goes out as its bytes, text as text */
   return new Response(body, {
     status: 200,
     headers: {
