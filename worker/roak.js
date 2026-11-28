@@ -38,6 +38,63 @@ var LIMITS = {
   title: 80, tag: 16, reason: 200, notice: 500, ai: 4000
 };
 
+/* ---------- columns added after the first release ----------
+   Made once, quietly, on the first request that needs them, so the database
+   needs no migration run by hand. */
+var schemaReady = false;
+
+async function ensureSchema(env) {
+  if (schemaReady) { return; }
+  var adds = [
+    'ALTER TABLE accounts ADD COLUMN last_ip TEXT',
+    'ALTER TABLE accounts ADD COLUMN last_ip_at INTEGER',
+    'ALTER TABLE accounts ADD COLUMN pw_hint TEXT',
+    'ALTER TABLE accounts ADD COLUMN pw_hint_at INTEGER'
+  ];
+  for (var i = 0; i < adds.length; i++) {
+    try { await env.DB.prepare(adds[i]).run(); } catch (e) { /* already there */ }
+  }
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS ipbans (ip TEXT PRIMARY KEY, reason TEXT, by TEXT, at INTEGER)').run();
+  } catch (e) {}
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS pwbans (hint TEXT PRIMARY KEY, reason TEXT, by TEXT, at INTEGER)').run();
+  } catch (e) {}
+  try {
+    await env.DB.prepare('CREATE TABLE IF NOT EXISTS mistakes (key TEXT PRIMARY KEY, n INTEGER, at INTEGER)').run();
+  } catch (e) {}
+  schemaReady = true;
+}
+
+/* ---------- the address someone is at ----------
+   Cloudflare puts the caller's address on the request. It is kept only on the
+   account row, so the owner can see where a name signs in from. */
+function callerIp(request) {
+  try {
+    var h = request.headers;
+    var ip = h.get('cf-connecting-ip') || h.get('x-real-ip') || '';
+    if (!ip) {
+      var xff = h.get('x-forwarded-for') || '';
+      if (xff) { ip = String(xff).split(',')[0]; }
+    }
+    return String(ip || '').replace(/\s/g, '').slice(0, 60);
+  } catch (e) { return ''; }
+}
+
+/* ---------- a password's fingerprint ----------
+   The password itself is never stored or shown. What is kept is a slow one-way
+   fingerprint of it, so the owner can SEE which accounts share a password and
+   can block them all at once. It is 100000 rounds of PBKDF2 over the password
+   with a fixed public salt: the only passwords it can be turned back into are
+   short, obvious ones, and a good password stays safe. */
+var HINT_SALT = 'roak-hq-password-hint-v1';
+
+async function pwHint(password) {
+  var bytes = new TextEncoder().encode(HINT_SALT + '|' + String(password || ''));
+  var out = await pbkdf2Raw(bytes, ITERATIONS);
+  return toBase64(out).slice(0, 24);
+}
+
 /* ---------- small helpers ---------- */
 
 
@@ -166,6 +223,56 @@ function cleanName(n) {
   return trim(String(n || '')).replace(/\s+/g, ' ').slice(0, LIMITS.name);
 }
 
+/* ---------- words the owner does not want on the HQ ---------- */
+/* Each bad word is swapped for the plainer one the owner chose. Longer words
+   are swapped first, so "pussycat" and "assassin" are left alone. The letters
+   that follow are carried over, so "fucking" becomes "fuhking" and the
+   sentence still reads. It never touches a person's name. */
+var SWAPS = [
+  ['nigger', 'nga'],
+  ['pussy', 'puh'],
+  ['penis', 'penih'],
+  ['dick', 'dih'],
+  ['boob', 'booh'],
+  ['fuck', 'fuh'],
+  ['sex', 'seh'],
+  ['tit', 'tih'],
+  ['ass', 'ahh']
+];
+
+/* The few longer words that only look like a bad one, left as they are. */
+var KEEP = ['assassin', 'assassinate', 'assassination', 'cassette', 'classic',
+            'classical', 'massive', 'passage', 'passion', 'pussycat', 'titter',
+            'titrate', 'dickens', 'assemble', 'assert', 'asset'];
+
+function tidyWords(text) {
+  var out = String(text === undefined || text === null ? '' : text);
+  /* longer bad words first, so "nigger" is not half-swapped by a shorter one */
+  for (var i = 0; i < SWAPS.length; i++) {
+    var bad = SWAPS[i][0];
+    var good = SWAPS[i][1];
+    /* the word, then only the letters that are not a new word: "fucking"
+       keeps "ing", "dick head" keeps the space between them */
+    var re = new RegExp(bad + '([A-Za-z]*)', 'g');
+    out = out.replace(re, function (m, after) {
+      /* m already carries the letters after it; after is those letters alone */
+      var whole = String(m).toLowerCase();
+      for (var k = 0; k < KEEP.length; k++) {
+        if (whole === KEEP[k]) { return m; }
+      }
+      /* keep the capital the writer used, and the ending they wrote */
+      var wholeWord = String(m);
+      var first = wholeWord.charAt(0);
+      var cut = wholeWord.toLowerCase().indexOf(bad);
+      var tail = cut >= 0 ? wholeWord.slice(cut + bad.length) : '';
+      var lead = (first === first.toUpperCase() && first !== first.toLowerCase())
+        ? good.charAt(0).toUpperCase() + good.slice(1) : good;
+      return lead + tail;
+    });
+  }
+  return out;
+}
+
 function newId(prefix, size) {
   var bytes = new Uint8Array(size || 12);
   crypto.getRandomValues(bytes);
@@ -223,6 +330,14 @@ async function pbkdf2(password, saltBytes, iterations) {
     { name: 'PBKDF2', salt: saltBytes, iterations: iterations, hash: 'SHA-256' },
     base, 256);
   return hexOf(bits);
+}
+
+async function pbkdf2Raw(bytes, iterations) {
+  var base = await crypto.subtle.importKey('raw', bytes, 'PBKDF2', false, ['deriveBits']);
+  var bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: new TextEncoder().encode('roak-hint'), iterations: iterations, hash: 'SHA-256' },
+    base, 256);
+  return new Uint8Array(bits);
 }
 
 /* the same length of time either way, so a wrong name and a wrong password
@@ -327,6 +442,20 @@ async function boardOf(env, kind, limit) {
     var item = { id: r.id, by: r.by, text: r.body, at: r.at };
     if (kind === 'post') { item.tag = r.tag || ''; }
     out.push(item);
+  }
+  /* what people said under each of them, oldest first */
+  if (out.length) {
+    var said = await all(env,
+      'SELECT id, by, body, at, thread FROM posts WHERE kind = ? ORDER BY at ASC', ['comment']);
+    var under = {};
+    for (var c = 0; c < said.length; c++) {
+      var m = said[c];
+      if (!under[m.thread]) { under[m.thread] = []; }
+      under[m.thread].push({ id: m.id, by: m.by, text: m.body, at: m.at });
+    }
+    for (var d = 0; d < out.length; d++) {
+      out[d].comments = under[out[d].id] || [];
+    }
   }
   return out;
 }
@@ -444,7 +573,7 @@ async function stateFor(env, acc) {
 
 /* ---------- actions ---------- */
 
-async function signUp(env, p) {
+async function signUp(env, p, request) {
   var name = cleanName(p.name);
   var password = String(p.password || '');
   if (!name) { return { error: 'Type a name.' }; }
@@ -452,8 +581,19 @@ async function signUp(env, p) {
   if (password.length < LIMITS.passwordMin) { return { error: 'The password needs 6 letters or more.' }; }
   if (password.length > LIMITS.password) { return { error: 'That password is too long.' }; }
   var key = nameKey(name);
-  var existing = await one(env, 'SELECT id FROM accounts WHERE key = ?', [key]);
-  if (existing) { return { error: 'That name is taken. Try another.' }; }
+  var ip = callerIp(request);
+  var blocked = ip ? await one(env, 'SELECT reason FROM ipbans WHERE ip = ?', [ip]) : null;
+  if (blocked) {
+    return { error: 'This device has been blocked from this HQ.' +
+      (blocked.reason ? ' The reason: ' + blocked.reason : '') };
+  }
+  var pwBlocked = await one(env, 'SELECT reason FROM pwbans WHERE hint = ?', [await pwHint(password)]);
+  if (pwBlocked) {
+    return { error: 'That password has been blocked from this HQ. Use a different one.' +
+      (pwBlocked.reason ? ' The reason: ' + pwBlocked.reason : '') };
+  }
+  var existing = await one(env,
+    'SELECT id, salt, hash, iter FROM accounts WHERE key = ?', [key]);
 
   var saltBytes = new Uint8Array(16);
   crypto.getRandomValues(saltBytes);
@@ -462,19 +602,46 @@ async function signUp(env, p) {
   var token = newToken();
   var id = newId('a');
   var at = now();
+  var tokenHash = await sha256Hex(token);
+
+  /* An account that came across from the old site may have no password on it.
+     Signing up with that name sets one instead of refusing: the same person
+     taking their name back. It never touches an account that has a password,
+     and the owner's name is never taken from them this way. */
+  var hint = await pwHint(password);
+  var ip = callerIp(request);
+  var legacy = existing;
+  if (legacy && key !== OWNER_KEY && !String(legacy.hash || '').replace(/\s/g, '')) {
+    await run(env,
+      'UPDATE accounts SET salt = ?, hash = ?, iter = ?, token = ?, seen = ?, ' +
+      'pw_hint = ?, pw_hint_at = ?, last_ip = ?, last_ip_at = ? WHERE id = ?',
+      [salt, hash, ITERATIONS, tokenHash, at, hint, at, ip, at, legacy.id]);
+    return { token: token, name: name, tookBack: true };
+  }
+
+  if (existing) { return { error: 'That name is taken. Try another.' }; }
 
   await run(env,
-    'INSERT INTO accounts (id, name, key, salt, hash, iter, token, seen, created) ' +
-    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [id, name, key, salt, hash, ITERATIONS, await sha256Hex(token), at, at]);
+    'INSERT INTO accounts (id, name, key, salt, hash, iter, token, seen, created, ' +
+    'pw_hint, pw_hint_at, last_ip, last_ip_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [id, name, key, salt, hash, ITERATIONS, tokenHash, at, at, hint, at, ip, at]);
 
   return { token: token, name: name };
 }
 
-async function signIn(env, p) {
+async function signIn(env, p, request) {
   var name = cleanName(p.name);
   var password = String(p.password || '');
   if (!name || !password) { return { error: 'Type your name and password.' }; }
+  var ip = callerIp(request);
+
+  /* an address that was blocked is refused before anything else */
+  var blocked = ip ? await one(env, 'SELECT reason FROM ipbans WHERE ip = ?', [ip]) : null;
+  if (blocked) {
+    return { error: 'This device has been blocked from this HQ.' +
+      (blocked.reason ? ' The reason: ' + blocked.reason : '') };
+  }
+
   var acc = await one(env, 'SELECT * FROM accounts WHERE key = ?', [nameKey(name)]);
   if (!acc) {
     await burn(password);
@@ -486,12 +653,87 @@ async function signIn(env, p) {
   }
   var hash = await pbkdf2(password, fromBase64(acc.salt), acc.iter || ITERATIONS);
   if (!safeEqual(hash, acc.hash)) {
+    await run(env, 'INSERT INTO mistakes (key, n, at) VALUES (?, 1, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET n = n + 1, at = ?', [nameKey(name), now(), now()]);
     return { error: 'Wrong password.' };
   }
+
+  /* a password that was blocked may not be used again, whatever the name */
+  var hint = await pwHint(password);
+  var pwBlocked = await one(env, 'SELECT reason FROM pwbans WHERE hint = ?', [hint]);
+  if (pwBlocked) {
+    return { error: 'That password has been blocked from this HQ.' +
+      (pwBlocked.reason ? ' The reason: ' + pwBlocked.reason : '') };
+  }
+
   var token = newToken();
-  await run(env, 'UPDATE accounts SET token = ?, seen = ? WHERE id = ?',
-    [await sha256Hex(token), now(), acc.id]);
+  await run(env, 'UPDATE accounts SET token = ?, seen = ?, pw_hint = ?, pw_hint_at = ?, ' +
+    'last_ip = ?, last_ip_at = ? WHERE id = ?',
+    [await sha256Hex(token), now(), hint, now(), ip, now(), acc.id]);
   return { token: token, name: acc.name };
+}
+
+/* The owner may set a new password on their own account. They prove they are
+   the owner with their owner password, sent as the usual password; only the
+   hash of the new one is ever saved. */
+async function changePassword(env, p) {
+  var name = cleanName(p.name);
+  var current = String(p.password || '');
+  var next = String(p.next || '');
+  if (!name || !current || !next) { return { error: 'Fill in every box.' }; }
+  if (next.length < LIMITS.passwordMin) { return { error: 'The new password needs 6 letters or more.' }; }
+  if (next.length > LIMITS.password) { return { error: 'That password is too long.' }; }
+  var key = nameKey(name);
+  if (key !== OWNER_KEY) { return { error: 'Only the owner can do that.' }; }
+  var acc = await one(env, 'SELECT * FROM accounts WHERE key = ?', [key]);
+  if (!acc) { return { error: 'No account called "' + name + '".' }; }
+  var hash = await pbkdf2(current, fromBase64(acc.salt), acc.iter || ITERATIONS);
+  if (!safeEqual(hash, acc.hash)) { return { error: 'Wrong password.' }; }
+
+  var saltBytes = new Uint8Array(16);
+  crypto.getRandomValues(saltBytes);
+  var salt = toBase64(saltBytes);
+  var newHash = await pbkdf2(next, saltBytes, ITERATIONS);
+  await run(env, 'UPDATE accounts SET salt = ?, hash = ?, iter = ?, pw_hint = ?, pw_hint_at = ? ' +
+    'WHERE id = ?', [salt, newHash, ITERATIONS, await pwHint(next), now(), acc.id]);
+  return { ok: true };
+}
+
+/* The owner, already signed in as themselves, may set a new password without
+   typing the old one - the way back in when the old one is not what they
+   thought it was. Only the owner, and only on their own account. */
+async function ownerPassword(env, acc, p) {
+  if (!acc) { return { error: 'signin' }; }
+  var name = cleanName(p.name || acc.name);
+  var next = String(p.next || '');
+  if (nameKey(name) !== OWNER_KEY) { return { error: 'Only the owner can do that.' }; }
+  if (nameKey(acc.name) !== OWNER_KEY) { return { error: 'Only the owner can do that.' }; }
+  if (next.length < LIMITS.passwordMin) { return { error: 'The new password needs 6 letters or more.' }; }
+  if (next.length > LIMITS.password) { return { error: 'That password is too long.' }; }
+  var saltBytes = new Uint8Array(16);
+  crypto.getRandomValues(saltBytes);
+  var salt = toBase64(saltBytes);
+  var hash = await pbkdf2(next, saltBytes, ITERATIONS);
+  await run(env, 'UPDATE accounts SET salt = ?, hash = ?, iter = ? WHERE key = ?',
+    [salt, hash, ITERATIONS, OWNER_KEY]);
+  return { ok: true };
+}
+
+/* The owner has been signed in with their own password. Their password is
+   then set to the new one, no old one asked for: the session is the proof. */
+async function ownerSetPassword(env, acc, p) {
+  if (!acc) { return { error: 'signin' }; }
+  if (nameKey(acc.name) !== OWNER_KEY) { return { error: 'Only the owner can do that.' }; }
+  var next = String(p.next || '');
+  if (next.length < LIMITS.passwordMin) { return { error: 'The new password needs 6 letters or more.' }; }
+  if (next.length > LIMITS.password) { return { error: 'That password is too long.' }; }
+  var saltBytes = new Uint8Array(16);
+  crypto.getRandomValues(saltBytes);
+  var salt = toBase64(saltBytes);
+  var hash = await pbkdf2(next, saltBytes, ITERATIONS);
+  await run(env, 'UPDATE accounts SET salt = ?, hash = ?, iter = ?, pw_hint = ?, pw_hint_at = ? ' +
+    'WHERE id = ?', [salt, hash, ITERATIONS, await pwHint(next), now(), acc.id]);
+  return { ok: true };
 }
 
 async function signOut(env, acc) {
@@ -501,13 +743,17 @@ async function signOut(env, acc) {
 
 async function addPost(env, acc, kind, body, thread, tag) {
   var id = newId(kind.charAt(0));
+  /* chat, posts, pins, topics, replies, comments and the tag all pass through
+     the word list here, which is the one place everything is written */
+  var clean = tidyWords(body);
   await run(env,
     'INSERT INTO posts (id, kind, thread, by, body, tag, at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [id, kind, thread || '', acc.name, body, tag || '', now()]);
+    [id, kind, thread || '', acc.name, clean, tidyWords(tag || ''), now()]);
   return id;
 }
 
 async function handle(env, request, action, p) {
+  await ensureSchema(env);
   var acc = await whoIsIt(env, request);
 
   if (action === 'state') {
@@ -523,8 +769,9 @@ async function handle(env, request, action, p) {
     return { name: acc.name };
   }
 
-  if (action === 'signup') { return await signUp(env, p); }
-  if (action === 'signin') { return await signIn(env, p); }
+  if (action === 'signup') { return await signUp(env, p, request); }
+  if (action === 'signin') { return await signIn(env, p, request); }
+  if (action === 'passwd') { return await changePassword(env, p); }
 
   if (action === 'signout') {
     /* wipe whatever token was sent, signed in or not */
@@ -582,6 +829,18 @@ async function handle(env, request, action, p) {
     return { error: 'Unknown board.' };
   }
 
+  if (action === 'comment') {
+    var on = trim(p.on);
+    var words = trim(p.text);
+    if (!on || !words) { return { error: 'Nothing to say.' }; }
+    words = str(words, LIMITS.chat);
+    var parent = await one(env,
+      "SELECT id FROM posts WHERE id = ? AND kind IN ('post','pin')", [on]);
+    if (!parent) { return { error: 'That post is gone.' }; }
+    var cid = await addPost(env, acc, 'comment', words, on);
+    return { id: cid };
+  }
+
   if (action === 'like') {
     var pid = String(p.id || '');
     var had = await one(env, 'SELECT 1 AS x FROM likes WHERE post_id = ? AND by = ?', [pid, acc.name]);
@@ -605,6 +864,12 @@ async function handle(env, request, action, p) {
 
   /* ---- admin powers: checked here, on the server ---- */
 
+  if (action === 'admin.password') {
+    /* signed in as the owner: set it. Not signed in: they must prove the old one. */
+    if (acc && nameKey(acc.name) === OWNER_KEY) { return await ownerSetPassword(env, acc, p); }
+    return await ownerPassword(env, acc, p);
+  }
+
   if (action.indexOf('admin.') === 0) {
     if (!(await isAdmin(env, acc))) { return { error: 'Admins only.' }; }
     return await adminAction(env, acc, action.slice(6), p);
@@ -616,6 +881,18 @@ async function handle(env, request, action, p) {
 async function adminAction(env, acc, what, p) {
   var name = cleanName(p.name);
   var key = nameKey(name);
+
+  /* one thing at a time, chosen by its id: this comes before any name is
+     cleaned, because a post id is not a name */
+  if (what === 'del') {
+    var id = String(p.post || p.id || '');
+    if (!id) { return { error: 'Nothing chosen.' }; }
+    var row = await one(env, 'SELECT id, by, kind FROM posts WHERE id = ?', [id]);
+    if (!row) { return { error: 'That is already gone.' }; }
+    await run(env, 'DELETE FROM posts WHERE id = ? OR (kind = ? AND thread = ?)', [id, 'reply', id]);
+    await run(env, 'DELETE FROM likes WHERE post_id = ?', [id]);
+    return { ok: true, by: row.by, kind: row.kind };
+  }
 
   if (what === 'ban') {
     if (key === OWNER_KEY) { return { error: 'The owner cannot be banned.' }; }
@@ -664,6 +941,89 @@ async function adminAction(env, acc, what, p) {
     await run(env, 'DELETE FROM posts WHERE by = ?', [name]);
     return { ok: true };
   }
+  /* what the owner can see: each account's last address and password
+     fingerprint. Never the password itself - the server does not have it. */
+  if (what === 'people') {
+    var rows = await all(env,
+      'SELECT name, key, seen, created, banned, admin, last_ip, last_ip_at, ' +
+      'pw_hint, pw_hint_at FROM accounts ORDER BY created ASC');
+    var people = [];
+    var mistakes = {};
+    var ms = await all(env, 'SELECT key, n FROM mistakes');
+    for (var mi = 0; mi < ms.length; mi++) { mistakes[ms[mi].key] = ms[mi].n; }
+    var hints = {};
+    for (var hi = 0; hi < rows.length; hi++) {
+      var hk = String(rows[hi].pw_hint || '');
+      if (hk) { hints[hk] = (hints[hk] || 0) + 1; }
+    }
+    for (var ri = 0; ri < rows.length; ri++) {
+      var r = rows[ri];
+      people.push({
+        name: r.name, key: r.key, seen: r.seen, created: r.created,
+        banned: r.banned, admin: r.admin,
+        ip: r.last_ip || '', ipAt: r.last_ip_at || 0,
+        hint: r.pw_hint || '', hintAt: r.pw_hint_at || 0,
+        shares: r.pw_hint ? hints[r.pw_hint] : 0,
+        mistakes: mistakes[r.key] || 0
+      });
+    }
+    return { people: people };
+  }
+
+  /* the lists of blocked addresses and blocked passwords */
+  if (what === 'blocks') {
+    return {
+      ips: await all(env, 'SELECT ip, reason, by, at FROM ipbans ORDER BY at DESC'),
+      hints: await all(env, 'SELECT hint, reason, by, at FROM pwbans ORDER BY at DESC')
+    };
+  }
+
+  /* ban everyone who signs in from this address, and block the address itself */
+  if (what === 'banip') {
+    var ip = String(p.ip || '').replace(/\s/g, '').slice(0, 60);
+    if (!ip) { return { error: 'No address given.' }; }
+    var whyIp = str(trim(p.reason), LIMITS.reason);
+    await run(env, 'INSERT OR REPLACE INTO ipbans (ip, reason, by, at) VALUES (?, ?, ?, ?)',
+      [ip, whyIp, acc.name, now()]);
+    var same = await all(env, 'SELECT key, name FROM accounts WHERE last_ip = ?', [ip]);
+    for (var si = 0; si < same.length; si++) {
+      if (same[si].key === OWNER_KEY) { continue; }
+      await run(env, 'INSERT INTO bans (name, key, reason, by, at) VALUES (?, ?, ?, ?, ?)',
+        [same[si].name, same[si].key, whyIp || ('Banned with the address ' + ip), acc.name, now()]);
+      await run(env, 'UPDATE accounts SET banned = 1, ban_reason = ?, token = NULL WHERE key = ?',
+        [whyIp || ('Banned with the address ' + ip), same[si].key]);
+    }
+    return { ok: true, banned: same.length };
+  }
+  if (what === 'unbanip') {
+    var ip2 = String(p.ip || '').replace(/\s/g, '').slice(0, 60);
+    await run(env, 'DELETE FROM ipbans WHERE ip = ?', [ip2]);
+    return { ok: true };
+  }
+
+  /* ban everyone who uses this password, and block the password itself */
+  if (what === 'banpass') {
+    var hint = String(p.hint || '').slice(0, 64);
+    if (!hint) { return { error: 'No password given.' }; }
+    var whyPw = str(trim(p.reason), LIMITS.reason);
+    await run(env, 'INSERT OR REPLACE INTO pwbans (hint, reason, by, at) VALUES (?, ?, ?, ?)',
+      [hint, whyPw, acc.name, now()]);
+    var users = await all(env, 'SELECT key, name FROM accounts WHERE pw_hint = ?', [hint]);
+    for (var ui = 0; ui < users.length; ui++) {
+      if (users[ui].key === OWNER_KEY) { continue; }
+      await run(env, 'INSERT INTO bans (name, key, reason, by, at) VALUES (?, ?, ?, ?, ?)',
+        [users[ui].name, users[ui].key, whyPw || 'Banned with their password', acc.name, now()]);
+      await run(env, 'UPDATE accounts SET banned = 1, ban_reason = ?, token = NULL WHERE key = ?',
+        [whyPw || 'Banned with their password', users[ui].key]);
+    }
+    return { ok: true, banned: users.length };
+  }
+  if (what === 'unbanpass') {
+    var hint2 = String(p.hint || '').slice(0, 64);
+    await run(env, 'DELETE FROM pwbans WHERE hint = ?', [hint2]);
+    return { ok: true };
+  }
+
   if (what === 'clear') {
     var kind = String(p.kind || '');
     if (kind === 'topics') {
