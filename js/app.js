@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '3.1';
+  var BUILD = '3.2';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1247,6 +1247,12 @@ var ROAK = (function () {
       '<div id="toast"></div>';
 
     document.getElementById('root').innerHTML = html;
+    /* the whole page was just replaced, the sheet with it: put its form back */
+    if (signinOpen) {
+      var sheet = document.getElementById('signin');
+      if (sheet) { sheet.style.display = 'block'; }
+      drawSignin(signinMode, signinError, signinName);
+    }
     stickBar();
     fitRoom();
 
@@ -3482,6 +3488,12 @@ var ROAK = (function () {
      purpose - a redraw must never take a half-typed sign-in away. */
   function keepSignin() {
     if (!signinOpen) { return; }
+    var el = document.getElementById('signin');
+    /* a fresh page puts a fresh, empty sheet in: fill it in again. But a sheet
+       that is already on the screen is left alone - redrawing it would throw
+       away whatever has been typed into it. */
+    if (el && el.style.display === 'block' && document.getElementById('accform')) { return; }
+    if (el) { el.style.display = 'block'; }
     drawSignin(signinMode, signinError, signinName);
   }
 
