@@ -36,6 +36,19 @@ Go to <https://dash.cloudflare.com/profile/api-tokens> → **Create Token** →
 
 Copy the token when it is shown — it is not shown again.
 
+## Done — the HQ is on Cloudflare
+
+- Worker + site: **https://roak-hq.andysurfer66.workers.dev/**
+- API: the same address with `/api` on the end
+- Database: D1 `roak-hq` (`e78a9909-63b3-4bff-9314-bc3fb5c0ed99`), schema loaded
+- Deployed with `deploy-worker.py` (the same upload `wrangler deploy` makes),
+  using the account API token. Change something and run it again to redeploy:
+  `CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=... python deploy-worker.py`
+
+**Still to do:** the old Firebase data (accounts, chat, posts, pins, topics) has
+not been copied across yet — the D1 database is empty. And the Worker serves only
+`/api` for now; the site itself is still on GitHub Pages.
+
 ## 4. Send me two things
 
 Paste them in the chat:
