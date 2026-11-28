@@ -16,7 +16,7 @@ var ROAK = (function () {
   /* Which build this page is. Bump BUILD on every change that goes live, and
      the stamp in the footer tells you at a glance whether the page you are
      looking at is the new one or a copy the browser kept. */
-  var BUILD = '4.2';
+  var BUILD = '4.3';
   var BUILD_DATE = '28 Nov 2026';
 
   var LS_KEY = 'roak.v2';          /* local cache of the shared tree */
@@ -1180,7 +1180,7 @@ var ROAK = (function () {
       '</a>' +
       '<div class="drawerbody">';
     for (var i = 0; i < cs.length; i++) {
-      out += '<div class="comment"><span class="who">' + esc(cs[i].by) + '</span> ' +
+      out += '<div class="comment"><span class="who">' + tagged(cs[i].by) + '</span> ' +
         '<span class="small dim">' + when(cs[i].at) + '</span><br>' +
         esc(cs[i].text) + '</div>';
     }
@@ -1420,7 +1420,7 @@ var ROAK = (function () {
 
     var who = me();
     var whoBar = who
-      ? '<span class="small" style="float:right;padding-top:6px">' + esc(who) +
+      ? '<span class="small" style="float:right;padding-top:6px">' + tagged(who) +
         ' &middot; <a href="#" id="switchname"><u>sign out</u></a></span>'
       : '<a class="btn small" style="float:right" href="#" id="signinbtn">Sign in</a>';
 
@@ -1864,6 +1864,61 @@ var ROAK = (function () {
       '</div>';
   }
 
+  /* ---------- the owner's name tag and undercover mode ----------
+     The tag follows the owner's name wherever it appears. Undercover takes the
+     tag, the admin marker and the admin screen away from everyone else's view,
+     and leaves everything else exactly as it was. */
+
+  function titleOf(name) {
+    var accs = list(tree.accounts);
+    var k = nameKey(name);
+    for (var i = 0; i < accs.length; i++) {
+      if (nameKey(accs[i].name) === k) { return String(accs[i].title || ''); }
+    }
+    return '';
+  }
+
+  function undercover() {
+    if (!isOwner()) { return false; }
+    var accs = list(tree.accounts);
+    for (var i = 0; i < accs.length; i++) {
+      if (nameKey(accs[i].name) === OWNER_KEY) { return !!accs[i].incognito; }
+    }
+    return false;
+  }
+
+  /* a name with its tag: <b>blockwobble</b> <span class="tag">the owner</span> */
+  function tagged(name, plain) {
+    var t = titleOf(name);
+    var who = esc(name);
+    if (!t) { return who; }
+    if (plain) { return who + ' (' + esc(t) + ')'; }
+    return who + ' <span class="tag">' + esc(t) + '</span>';
+  }
+
+  function ownerBox() {
+    if (!isOwner()) { return ''; }
+    var mine = titleOf(me());
+    var hidden = undercover();
+    return '<h2>Your name tag</h2>' +
+      '<div class="box tight"><p class="small" style="margin:0">' +
+      'A short title after your name, everywhere it appears: ' +
+      (mine ? 'now <b>' + esc(mine) + '</b>' : 'none yet') + '.</p></div>' +
+      '<label for="ownertitle">Title (leave it empty to take it off)</label>' +
+      '<input type="text" id="ownertitle" maxlength="24" autocomplete="off" ' +
+        'autocorrect="off" autocapitalize="off" value="' + esc(mine) + '">' +
+      '<a class="btn wide" href="#" id="asavetitle">Save the title</a>' +
+      '<h2>Undercover</h2>' +
+      '<div class="box tight"><p class="small" style="margin:0">' +
+      (hidden
+        ? 'You are undercover: your tag is hidden, and nothing marks you as the owner ' +
+          'to anyone else. You keep every power.'
+        : 'You are in plain sight: your tag and the owner mark are shown to everyone.') +
+      '</p></div>' +
+      '<a class="btn wide" href="#" id="aincognito">' +
+        (hidden ? 'Come back into the open' : 'Go undercover') + '</a>';
+  }
+
   function nameBox(what) {
     if (signedIn()) { return ''; }
     what = what || 'this';
@@ -1946,21 +2001,21 @@ var ROAK = (function () {
     var shown = 0;
     if (chat.length) {
       var last = chat[chat.length - 1];
-      body += '<div class="post"><div class="post-meta"><span class="who">' + esc(last.by) +
+      body += '<div class="post"><div class="post-meta"><span class="who">' + tagged(last.by) +
         '</span> &middot; in chat &middot; ' + when(last.at) + '</div>' +
         '<div class="post-body">' + esc(last.text) + '</div></div>';
       shown++;
     }
     if (nb.length) {
       var lp = nb[nb.length - 1];
-      body += '<div class="post"><div class="post-meta"><span class="who">' + esc(lp.by) +
+      body += '<div class="post"><div class="post-meta"><span class="who">' + tagged(lp.by) +
         '</span> &middot; in the neighborhood &middot; ' + when(lp.at) + '</div>' +
         '<div class="post-body">' + esc(lp.text) + '</div></div>';
       shown++;
     }
     if (pins.length) {
       var lpin = pins[pins.length - 1];
-      body += '<div class="post"><div class="post-meta"><span class="who">' + esc(lpin.by) +
+      body += '<div class="post"><div class="post-meta"><span class="who">' + tagged(lpin.by) +
         '</span> &middot; pinned &middot; ' + when(lpin.at) + '</div>' +
         '<div class="post-body">' + esc(lpin.text) + '</div></div>';
       shown++;
@@ -1968,7 +2023,7 @@ var ROAK = (function () {
     if (topics.length) {
       var lt = topics[topics.length - 1];
       body += '<a class="topic" href="#topic?id=' + esc(lt.id) + '"><span class="t">' + esc(lt.title) +
-        '</span><span class="m">' + esc(lt.by) + ' &middot; ' + when(lt.at) +
+        '</span><span class="m">' + tagged(lt.by, true) + ' &middot; ' + when(lt.at) +
         ' &middot; ' + list(lt.replies).length + ' repl' + (list(lt.replies).length === 1 ? 'y' : 'ies') + '</span></a>';
       shown++;
     }
@@ -2232,7 +2287,7 @@ var ROAK = (function () {
     var h = '';
     for (var i = 0; i < msgs.length; i++) {
       h += '<div class="msg' + (msgs[i].by === me() ? ' me' : '') + '">' +
-        '<span class="who">' + esc(msgs[i].by) + '</span>' +
+        '<span class="who">' + tagged(msgs[i].by) + '</span>' +
         '<span class="when">' + when(msgs[i].at) + '</span>' +
         '<div class="text">' + esc(msgs[i].text) + '</div>' +
       '</div>';
@@ -2264,7 +2319,7 @@ var ROAK = (function () {
     for (var i = 0; i < part.length; i++) {
       var m = part[i];
       h += '<div class="msg' + (m.by === me() ? ' me' : '') + '">' +
-        '<span class="who">' + esc(m.by) + '</span>' +
+        '<span class="who">' + tagged(m.by) + '</span>' +
         '<span class="when">' + when(m.at) + '</span>' +
         '<div class="text">' + esc(m.text) + '</div>' +
       '</div>';
@@ -2359,7 +2414,7 @@ var ROAK = (function () {
           if (likes[k].id === p.id) { liked = true; }
         }
         listHtml += '<div class="post">' +
-          '<div class="post-meta"><span class="who">' + esc(p.by) + '</span> &middot; ' + when(p.at) +
+          '<div class="post-meta"><span class="who">' + tagged(p.by) + '</span> &middot; ' + when(p.at) +
             (p.tag ? ' &middot; #' + esc(p.tag) : '') + '</div>' +
           '<div class="post-body">' + esc(p.text) + '</div>' +
           '<div class="post-actions">' +
@@ -2472,7 +2527,7 @@ var ROAK = (function () {
       for (i = 0; i < pins.length; i++) {
         var p = pins[i];
         listHtml += '<div class="post pin">' +
-          '<div class="post-meta"><span class="who">' + esc(p.by) + '</span> &middot; ' + when(p.at) + '</div>' +
+          '<div class="post-meta"><span class="who">' + tagged(p.by) + '</span> &middot; ' + when(p.at) + '</div>' +
           '<div class="post-body">' + esc(p.text) + '</div>' +
           '<div class="post-actions">' +
             (p.by === me()
@@ -2594,7 +2649,7 @@ var ROAK = (function () {
       body += statusBox();
       body += '<p class="small"><a href="#topics">&larr; All topics</a></p>';
       body += '<div class="box tight"><b>' + esc(t.title) + '</b><br>' +
-              '<span class="small dim">started by ' + esc(t.by) + ' &middot; ' + when(t.at) +
+              '<span class="small dim">started by ' + tagged(t.by) + ' &middot; ' + when(t.at) +
               ' &middot; ' + replies.length + ' repl' + (replies.length === 1 ? 'y' : 'ies') + '</span></div>';
       body += '<div class="room"><div class="roomlist" id="replies">';
       if (!replies.length) {
@@ -2602,7 +2657,7 @@ var ROAK = (function () {
       }
       for (i = 0; i < replies.length; i++) {
         body += '<div class="post">' +
-          '<div class="post-meta"><span class="who">' + esc(replies[i].by) + '</span> &middot; ' + when(replies[i].at) + '</div>' +
+          '<div class="post-meta"><span class="who">' + tagged(replies[i].by) + '</span> &middot; ' + when(replies[i].at) + '</div>' +
           '<div class="post-body">' + esc(replies[i].text) + '</div>' +
         '</div>';
       }
@@ -2707,7 +2762,7 @@ var ROAK = (function () {
       var n = list(tt.replies).length;
       h += '<a class="topic" href="#topics?id=' + encodeURIComponent(tt.id) + '">' +
         '<span class="t">' + esc(tt.title) + '</span>' +
-        '<span class="m">' + esc(tt.by) + ' &middot; ' + n + ' repl' + (n === 1 ? 'y' : 'ies') +
+        '<span class="m">' + tagged(tt.by, true) + ' &middot; ' + n + ' repl' + (n === 1 ? 'y' : 'ies') +
         ' &middot; ' + when(tt.at) + '</span></a>';
     }
     return h;
@@ -2740,7 +2795,7 @@ var ROAK = (function () {
     }
     for (var j = 0; j < rs.length; j++) {
       h2 += '<div class="post">' +
-        '<div class="post-meta"><span class="who">' + esc(rs[j].by) + '</span> &middot; ' +
+        '<div class="post-meta"><span class="who">' + tagged(rs[j].by) + '</span> &middot; ' +
           when(rs[j].at) + '</div>' +
         '<div class="post-body">' + esc(rs[j].text) + '</div>' +
       '</div>';
@@ -2915,6 +2970,9 @@ var ROAK = (function () {
       '<a class="btn wide" href="#" id="asavenote">Put the notice up</a>' +
       (note ? '<a class="btn wide" href="#" id="aclearnote">Take it down</a>' : '');
 
+    /* the owner's own name tag and undercover mode */
+    body += ownerBox();
+
     /* who is here: address, password fingerprint, wrong tries */
     body += '<h2>Who is here</h2>' +
       '<div class="box tight"><p class="small" style="margin:0">' +
@@ -2985,6 +3043,30 @@ var ROAK = (function () {
       }],
       ['aclearnote', function () { setNotice('pins', '', function () { render(); toast('Notice taken down'); }); }],
       ['apeople', function () { adminPeople(); }],
+      ['asavetitle', function () {
+        var t = trim(document.getElementById('ownertitle').value);
+        apiCall('admin.title', { title: t }, function (ok, d) {
+          if (!ok) { toast((d && d.error) || 'That did not work'); return; }
+          var accs = list(tree.accounts);
+          for (var i = 0; i < accs.length; i++) {
+            if (nameKey(accs[i].name) === OWNER_KEY) { accs[i].title = t; }
+          }
+          render();
+          toast(t ? 'Your title is "' + t + '"' : 'Title taken off');
+        });
+      }],
+      ['aincognito', function () {
+        var on = !undercover();
+        apiCall('admin.incognito', { on: on }, function (ok, d) {
+          if (!ok) { toast((d && d.error) || 'That did not work'); return; }
+          var accs = list(tree.accounts);
+          for (var i = 0; i < accs.length; i++) {
+            if (nameKey(accs[i].name) === OWNER_KEY) { accs[i].incognito = on; }
+          }
+          render();
+          toast(on ? 'You are undercover' : 'You are in the open again');
+        });
+      }],
       ['athing', function () { adminThings(); }]
     ];
     for (var b = 0; b < btns.length; b++) {
